@@ -49,6 +49,9 @@ import {
   type UltimateRunModifiers,
 } from './ultimateModifiers';
 
+import { BallTier } from '../ballTypes';
+import type { SuperRogueCardId } from '../config/superRogueCards';
+import { rollSuperRogueOptions } from './superRoguePick';
 import type { GameState, LaunchPayload, MonsterSnapshot } from './types';
 
 
@@ -98,6 +101,14 @@ export function createInitialGameState(): GameState {
     frostDebuffPending: false,
 
     judgmentPending: false,
+
+    monstersKilled: 0,
+
+    settlement: null,
+
+    superRoguePicks: [],
+
+    superRoguePickOptions: [],
 
   };
 
@@ -247,6 +258,11 @@ export class GameLogic {
 
 
 
+  recordMonsterKill(): void {
+    if (this.state.phase === 'settled') return;
+    this.patch({ monstersKilled: this.state.monstersKilled + 1 });
+  }
+
   addGold(amount: number) {
 
     this.patch({ gold: this.state.gold + amount });
@@ -285,9 +301,9 @@ export class GameLogic {
 
 
 
-  tryMerge(from: number, to: number): boolean {
+  tryMerge(from: number, to: number): BallTier | null {
 
-    if (this.state.phase !== 'prepare' || !this.state.runBallColors) return false;
+    if (this.state.phase !== 'prepare' || !this.state.runBallColors) return null;
 
     const result = applyMerge(
 
@@ -301,7 +317,7 @@ export class GameLogic {
 
     );
 
-    if (!result) return false;
+    if (!result) return null;
 
     this.patch({
       controlSlots: result.slots,
@@ -309,8 +325,40 @@ export class GameLogic {
         this.state.mergeAttackBonusPercent + result.attackBonusPercentAdd,
     });
 
-    return true;
+    return result.merged.tier;
 
+  }
+
+  beginSuperRoguePick(): void {
+    if (this.state.phase !== 'prepare' || !this.state.runBallColors) return;
+    const options = rollSuperRogueOptions(
+      this.state.runBallColors,
+      this.state.superRoguePicks,
+    );
+    if (options.length === 0) return;
+    this.patch({
+      phase: 'super_rogue_pick',
+      superRoguePickOptions: options.map((o) => o.id),
+    });
+  }
+
+  getSuperRoguePickOptionIds(): SuperRogueCardId[] {
+    return [...this.state.superRoguePickOptions];
+  }
+
+  selectSuperRogueCard(cardId: SuperRogueCardId): boolean {
+    if (this.state.phase !== 'super_rogue_pick') return false;
+    if (!this.state.superRoguePickOptions.includes(cardId)) return false;
+    this.patch({
+      phase: 'prepare',
+      superRoguePicks: [...this.state.superRoguePicks, cardId],
+      superRoguePickOptions: [],
+    });
+    return true;
+  }
+
+  getSuperRoguePicks(): readonly SuperRogueCardId[] {
+    return this.state.superRoguePicks;
   }
 
   getMergeAttackBonusPercent(): number {
@@ -548,50 +596,38 @@ export class GameLogic {
 
 
   onCombatEndedStartSpawn() {
-
-    if (this.state.phase === 'defeat' || this.state.phase === 'victory') return;
-
+    if (this.state.phase === 'settled') return;
     this.patch({ phase: 'spawn' });
-
   }
 
-
-
-  onSpawnFinished(wallDamage: number) {
-
-    if (this.state.phase === 'victory' || this.state.phase === 'defeat') return;
+  onSpawnFinished(
+    wallDamage: number,
+    waveOrdinal: number,
+    bossesDefeated: number,
+  ) {
+    if (this.state.phase === 'settled') return;
 
     const newWallHp = Math.max(0, this.state.wallHp - wallDamage);
 
     if (newWallHp <= 0) {
-      this.patch({ wallHp: 0, phase: 'defeat' });
+      this.patch({
+        wallHp: 0,
+        phase: 'settled',
+        settlement: {
+          waveOrdinal,
+          monstersKilled: this.state.monstersKilled,
+          bossesDefeated,
+          turn: this.state.turn,
+        },
+      });
       return;
     }
 
     this.patch({
-
       phase: 'prepare',
-
       turn: this.state.turn + 1,
-
       wallHp: newWallHp,
-
     });
-
-  }
-
-
-
-  onVictory() {
-
-    this.patch({ phase: 'victory' });
-
-  }
-
-  onDefeat() {
-
-    this.patch({ phase: 'defeat', wallHp: 0 });
-
   }
 
   restart(): void {

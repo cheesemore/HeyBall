@@ -125,14 +125,15 @@ export function drawMonsterBlock(
     const spec = getSpecialMonsterDef(typeId);
     if (spec) {
       const inset = 9;
-      g.roundRect(
-        inset,
-        inset,
-        w - inset * 2,
-        h - inset * 2,
-        innerR,
-      );
+      const innerW = w - inset * 2;
+      const innerH = h - inset * 2;
+      g.roundRect(inset, inset, innerW, innerH, innerR);
       g.fill({ color: spec.innerColor, alpha: 0.95 });
+      if (spec.visualStyle === 'shield') {
+        const bandH = Math.min(11, innerH * 0.28);
+        g.rect(inset, inset, innerW, bandH);
+        g.fill({ color: 0x0a0a0a, alpha: 1 });
+      }
     }
     return;
   }

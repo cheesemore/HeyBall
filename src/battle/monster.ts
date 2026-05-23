@@ -44,9 +44,10 @@ export function createMonsterInstance(
   anchorRow: number,
   anchorCol: number,
   growthStep = 0,
+  baseHpOverride?: number,
 ): BlockMonster {
   const row = getMonsterType(typeId);
-  const hp = getMonsterHp(growthStep, row.baseHp);
+  const hp = getMonsterHp(growthStep, baseHpOverride ?? row.baseHp);
   return {
     typeId,
     hp,

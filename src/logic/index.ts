@@ -2,6 +2,8 @@ export * from './types';
 export * from './controlGrid';
 export * from './targeting';
 export * from './autoPlay';
+export * from './ultimateAuto';
+export * from './superRoguePick';
 export * from './gameLogic';
 export * from './rewards';
 export * from './combatSession';

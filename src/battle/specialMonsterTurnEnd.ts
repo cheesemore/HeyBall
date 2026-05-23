@@ -2,6 +2,7 @@ import { getMonsterGrowthStep } from '../config/monsterScaling';
 import {
   getSpecialMonsterDef,
   HEAL_MAX_TARGETS_PER_CAST,
+  REGEN_HEAL_MAX_HP_RATIO,
   SPECIAL_MONSTER_TABLE,
   type SpecialMonsterKind,
 } from '../config/specialMonsters';
@@ -62,7 +63,16 @@ export type SpecialEnemyAction =
       toY: number;
       spawnedId: string;
     }
-  | { kind: 'charge'; sourceId: string };
+  | {
+      kind: 'regen';
+      sourceId: string;
+      color: number;
+      fromX: number;
+      fromY: number;
+      toX: number;
+      toY: number;
+      amount: number;
+    };
 
 export function sortMonstersGridOrder(monsters: BlockMonster[]): BlockMonster[] {
   return [...monsters].sort(
@@ -83,12 +93,17 @@ function kindColor(typeId: BlockMonster['typeId']): number {
 function emptyNeighborAnchors(
   grid: MonsterGrid,
   m: BlockMonster,
+  includeFront: boolean,
 ): { row: number; col: number }[] {
-  const candidates = [
+  const candidates: { row: number; col: number }[] = [];
+  if (includeFront && m.anchorRow > TOP_GRID_ROW) {
+    candidates.push({ row: m.anchorRow - 1, col: m.anchorCol });
+  }
+  candidates.push(
     { row: m.anchorRow, col: m.anchorCol - 1 },
     { row: m.anchorRow, col: m.anchorCol + 1 },
     { row: m.anchorRow + 1, col: m.anchorCol },
-  ];
+  );
   const out: { row: number; col: number }[] = [];
   for (const { row, col } of candidates) {
     if (canPlaceFootprint(grid, row, col, m.footprintW, m.footprintH)) {
@@ -200,7 +215,7 @@ function tryCopySelf(
   combat: CombatSessionState,
   runtime: SpecialMonsterRuntime,
 ): BlockMonster | null {
-  const spots = emptyNeighborAnchors(grid, source);
+  const spots = emptyNeighborAnchors(grid, source, true);
   const spot = pickRandom(spots);
   if (!spot) return null;
 
@@ -217,7 +232,6 @@ function tryCopySelf(
   if (ce && se) {
     ce.invincibleTurnsLeft = se.invincibleTurnsLeft;
     ce.frozen = se.frozen;
-    ce.charging = false;
   }
   return clone;
 }
@@ -228,7 +242,7 @@ function trySummonGray(
   runtime: SpecialMonsterRuntime,
   spawnRowOrdinal: number,
 ): BlockMonster | null {
-  const spots = emptyNeighborAnchors(grid, source);
+  const spots = emptyNeighborAnchors(grid, source, false);
   const spot = pickRandom(spots);
   if (!spot) return null;
 
@@ -280,24 +294,36 @@ function processHeal(
   };
 }
 
-function processCharge(
+function processRegen(
+  m: BlockMonster,
+): Extract<SpecialEnemyAction, { kind: 'regen' }> | null {
+  if (m.hp >= m.maxHp) return null;
+  const amount = Math.max(1, Math.round(m.maxHp * REGEN_HEAL_MAX_HP_RATIO));
+  const heal = Math.min(amount, m.maxHp - m.hp);
+  m.hp += heal;
+  const center = monsterCenter(m);
+  return {
+    kind: 'regen',
+    sourceId: m.instanceId,
+    color: kindColor(m.typeId),
+    fromX: center.x,
+    fromY: center.y,
+    toX: center.x,
+    toY: center.y,
+    amount: heal,
+  };
+}
+
+function processCopyOrSummon(
   grid: MonsterGrid,
   m: BlockMonster,
   kind: 'copy' | 'summon',
   runtime: SpecialMonsterRuntime,
   combat: CombatSessionState,
   spawnRowOrdinal: number,
-): SpecialEnemyAction | null {
+): Extract<SpecialEnemyAction, { kind: 'spawn' }> | null {
   const e = runtime.ensure(m.instanceId, m.typeId);
-  if (e.frozen) {
-    e.charging = false;
-    return null;
-  }
-
-  if (!e.charging) {
-    e.charging = true;
-    return { kind: 'charge', sourceId: m.instanceId };
-  }
+  if (e.frozen) return null;
 
   const from = monsterCenter(m);
   const color = kindColor(m.typeId);
@@ -309,7 +335,6 @@ function processCharge(
 
   if (!placed) return null;
 
-  e.charging = false;
   const to = monsterCenter(placed);
   return {
     kind: 'spawn',
@@ -357,6 +382,13 @@ export function planAndApplySpecialMonsterTurn(
       continue;
     }
 
+    if (kind === 'regen') {
+      if (runtime.isFrozen(m.instanceId)) continue;
+      const action = processRegen(m);
+      if (action) result.actions.push(action);
+      continue;
+    }
+
     if (kind === 'jump') {
       const action = resolveJump(grid, m, runtime, result.wallHits);
       if (action) result.actions.push(action);
@@ -364,7 +396,7 @@ export function planAndApplySpecialMonsterTurn(
     }
 
     if (kind === 'copy' || kind === 'summon') {
-      const action = processCharge(
+      const action = processCopyOrSummon(
         grid,
         m,
         kind,

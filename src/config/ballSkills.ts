@@ -66,13 +66,17 @@ export const HUNTER_VOLLEY_ARROW_COUNT = 3;
 
 export const HUNTER_VOLLEY_PARALLEL_SPACING = 16;
 
-/** 两次齐射间隔（秒） */
+/** 猎人齐射：每秒发射轮数（每轮并排 3 支） */
 
-export const HUNTER_VOLLEY_INTERVAL_SEC = 0.1;
+export const HUNTER_VOLLEYS_PER_SEC = 10;
 
-/** 贯通箭飞行时长 */
+/** 两次齐射间隔（秒）；飞行结束后立即接下一轮 */
 
-export const HUNTER_ARROW_FLIGHT_SEC = 0.2;
+export const HUNTER_VOLLEY_INTERVAL_SEC = 0;
+
+/** 贯通箭飞行时长（与齐射节奏一致：1 秒 10 射） */
+
+export const HUNTER_ARROW_FLIGHT_SEC = 1 / HUNTER_VOLLEYS_PER_SEC;
 
 /** 判定线宽（半宽，像素） */
 

@@ -4,14 +4,25 @@ import { getRecruitCost } from '../config/recruitCost';
 import { getNextBossSpawnOrdinal } from '../config/monsterSpawn';
 import { getRogueShopPrice, ROGUE_SHOP_MAX_PURCHASES } from '../config/rogueShop';
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
-import type { UltimateSkillId } from '../config/ultimateSkills';
+import {
+  AUTO_PLAY_ULTIMATE_SKILL,
+  type UltimateSkillId,
+} from '../config/ultimateSkills';
+import { hasMonsterFromTopRows } from '../logic/ultimateAuto';
 import { sumAttackFromSlots } from '../logic/ballAttackSum';
 import { RogueSkillPickScreen } from './rogueSkillPickScreen';
 import { RogueUpgradePickScreen } from './rogueUpgradePickScreen';
+import { SuperRoguePickScreen } from './superRoguePickScreen';
+import {
+  formatSuperRogueHudLines,
+  SUPER_ROGUE_CARD_DEFS,
+  type SuperRogueCardId,
+} from '../config/superRogueCards';
+import { BallTier } from '../ballTypes';
 import { UltimateSkillPanel } from './ultimateSkillPanel';
 import { BattleField } from '../battle/battleField';
 import { ControlArea, CONTROL_RIGHT_W } from '../controlArea';
-import { layout } from '../layout';
+import { BATTLE_WIDTH, battleLaunchLocalY, layout } from '../layout';
 import { ScreenShake } from './screenShake';
 import { DraftScreen } from './draftScreen';
 import { MonsterGroupPickScreen } from './monsterGroupPickScreen';
@@ -43,11 +54,14 @@ export class GameManager {
   private draftOverlay: DraftScreen | null = null;
   private rogueSkillOverlay: RogueSkillPickScreen | null = null;
   private rogueUpgradeOverlay: RogueUpgradePickScreen | null = null;
+  private superRogueOverlay: SuperRoguePickScreen | null = null;
   private monsterGroupOverlay: MonsterGroupPickScreen | null = null;
   private resultOverlay: GameResultOverlay | null = null;
   private readonly ultimatePanel: UltimateSkillPanel;
   private autoPlayEnabled = false;
   private autoPlayTimer = 0;
+  /** 每回合仅自动尝试一次末日审判（备战阶段） */
+  private autoJudgmentTurn = -1;
   private timeScale = 1;
 
   private wallText!: Text;
@@ -57,6 +71,8 @@ export class GameManager {
   private phaseText!: Text;
   private runBallEffectsText!: Text;
   private hudHintText!: Text;
+  private superRogueListText!: Text;
+  private bossCountdownText!: Text;
 
   constructor(root: Container) {
     this.root = root;
@@ -120,9 +136,22 @@ export class GameManager {
 
     this.logic.subscribe(() => this.syncPresentation());
     this.battle.setOnMonsterKill((monster) => {
+      this.logic.recordMonsterKill();
       this.logic.addGold(GameLogic.goldForKill(monster.typeId));
     });
     this.battle.setOnBossDefeated(() => this.updateHud());
+
+    this.bossCountdownText = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize: 16,
+        fill: 0xc8daf0,
+      },
+    });
+    this.bossCountdownText.anchor.set(0, 0.5);
+    this.bossCountdownText.position.set(BATTLE_WIDTH / 2 + 24, battleLaunchLocalY());
+    this.battle.addChild(this.bossCountdownText);
 
     this.syncPresentation();
     this.refreshDraftOverlay();
@@ -131,7 +160,7 @@ export class GameManager {
   private refreshDraftOverlay() {
     const state = this.logic.getState();
 
-    if (state.phase === 'victory' || state.phase === 'defeat') {
+    if (state.phase === 'settled') {
       this.clearDraftOverlays();
       this.battle.visible = true;
       this.rightPanel.visible = true;
@@ -181,6 +210,30 @@ export class GameManager {
     if (this.rogueUpgradeOverlay) {
       this.rogueUpgradeOverlay.destroy();
       this.rogueUpgradeOverlay = null;
+    }
+
+    if (state.phase === 'super_rogue_pick') {
+      const ids = this.logic.getSuperRoguePickOptionIds();
+      const options = ids
+        .map((id) => SUPER_ROGUE_CARD_DEFS[id])
+        .filter((d): d is NonNullable<typeof d> => d != null);
+      if (this.superRogueOverlay) {
+        this.superRogueOverlay.destroy();
+        this.superRogueOverlay = null;
+      }
+      this.superRogueOverlay = new SuperRoguePickScreen(options, (def) =>
+        this.pickSuperRogueCard(def.id),
+      );
+      this.root.addChild(this.superRogueOverlay);
+      this.control.setInteractable(false);
+      this.battle.visible = false;
+      this.rightPanel.visible = true;
+      return;
+    }
+
+    if (this.superRogueOverlay) {
+      this.superRogueOverlay.destroy();
+      this.superRogueOverlay = null;
     }
 
     if (state.phase === 'monster_group_draft') {
@@ -235,6 +288,12 @@ export class GameManager {
 
   private pickRogueUpgrade(id: RogueUpgradeId) {
     if (!this.logic.selectRogueUpgrade(id)) return;
+    this.refreshDraftOverlay();
+    this.syncPresentation();
+  }
+
+  private pickSuperRogueCard(id: SuperRogueCardId) {
+    if (!this.logic.selectSuperRogueCard(id)) return;
     this.refreshDraftOverlay();
     this.syncPresentation();
   }
@@ -410,6 +469,19 @@ export class GameManager {
     });
     this.hudHintText.position.set(0, 200);
 
+    this.superRogueListText = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize: 13,
+        fill: 0x9fd4ff,
+        wordWrap: true,
+        wordWrapWidth: hudTextW,
+        lineHeight: 16,
+      },
+    });
+    this.superRogueListText.position.set(0, 248);
+
     parent.addChild(
       this.wallText,
       this.turnText,
@@ -417,13 +489,22 @@ export class GameManager {
       this.phaseText,
       this.runBallEffectsText,
       this.hudHintText,
+      this.superRogueListText,
     );
   }
 
-  private layoutHudHintBelowBallEffects() {
+  private layoutLowerRightHud() {
     const bottom =
       this.runBallEffectsText.position.y + this.runBallEffectsText.height + 10;
     this.hudHintText.position.set(0, Math.max(200, bottom));
+
+    const picks = formatSuperRogueHudLines(this.logic.getSuperRoguePicks());
+    this.superRogueListText.text = picks;
+    this.superRogueListText.visible = picks.length > 0;
+    this.superRogueListText.position.set(
+      0,
+      this.hudHintText.position.y + this.hudHintText.height + 6,
+    );
   }
 
   tick(dt: number) {
@@ -461,6 +542,18 @@ export class GameManager {
     if (!this.autoPlayEnabled) return;
 
     const state = this.logic.getState();
+
+    if (state.phase === 'rogue_skill_pick') {
+      this.pickRogueSkill(AUTO_PLAY_ULTIMATE_SKILL);
+      return;
+    }
+
+    if (state.phase === 'super_rogue_pick') {
+      const ids = this.logic.getSuperRoguePickOptionIds();
+      if (ids[0]) this.pickSuperRogueCard(ids[0]);
+      return;
+    }
+
     if (
       state.phase !== 'prepare' ||
       !this.logic.getRunPool().length ||
@@ -471,12 +564,35 @@ export class GameManager {
 
     this.logic.syncBattleMonsters(this.battle.getMonsterSnapshots());
 
+    if (this.tryAutoJudgmentAtTurnStart()) {
+      return;
+    }
+
+    if (this.battle.isPrepareUltimateBusy()) {
+      return;
+    }
+
     this.autoPlayTimer -= dt;
     if (this.autoPlayTimer > 0) return;
     this.autoPlayTimer = AUTO_PLAY_INTERVAL_SEC;
 
     const action = decidePrepareAction(state);
     this.executePrepareAction(action);
+  }
+
+  /** 回合备战开始：城墙侧第3行内有怪且末日审判可用则自动释放 */
+  private tryAutoJudgmentAtTurnStart(): boolean {
+    const state = this.logic.getState();
+    if (state.phase !== 'prepare') return false;
+    if (state.turn === this.autoJudgmentTurn) return false;
+    if (state.ultimate.skill !== 'judgment') return false;
+    if (!this.logic.isUltimateReady()) return false;
+    if (this.battle.isPrepareUltimateBusy()) return false;
+    if (!hasMonsterFromTopRows(state.battleMonsters)) return false;
+
+    this.autoJudgmentTurn = state.turn;
+    this.handleUltimateActivate();
+    return true;
   }
 
   private executePrepareAction(action: PrepareAction) {
@@ -597,11 +713,12 @@ export class GameManager {
     if (
       state.phase === 'draft' ||
       state.phase === 'monster_group_draft' ||
-      state.phase === 'rogue_upgrade_pick'
+      state.phase === 'rogue_upgrade_pick' ||
+      state.phase === 'super_rogue_pick'
     ) {
       return;
     }
-    if (state.phase === 'defeat' || state.phase === 'victory') {
+    if (state.phase === 'settled') {
       this.showResultOverlayIfNeeded();
       this.updateHud();
       return;
@@ -614,7 +731,7 @@ export class GameManager {
     this.logic.syncBattleMonsters(this.battle.getMonsterSnapshots());
   }
 
-  private onDefeat() {
+  private onRunSettled() {
     this.autoPlayEnabled = false;
     this.control.setInteractable(false);
     this.battle.hideLaunchCone();
@@ -623,11 +740,12 @@ export class GameManager {
 
   private showResultOverlayIfNeeded() {
     const state = this.logic.getState();
-    if (state.phase !== 'victory' && state.phase !== 'defeat') return;
+    if (state.phase !== 'settled' || !state.settlement) return;
     if (this.resultOverlay) return;
 
-    const victory = state.phase === 'victory';
-    this.resultOverlay = new GameResultOverlay(victory, () => this.restartRun());
+    this.resultOverlay = new GameResultOverlay(state.settlement, () =>
+      this.restartRun(),
+    );
     this.root.addChild(this.resultOverlay);
     this.control.setInteractable(false);
   }
@@ -640,6 +758,10 @@ export class GameManager {
     if (this.rogueUpgradeOverlay) {
       this.rogueUpgradeOverlay.destroy();
       this.rogueUpgradeOverlay = null;
+    }
+    if (this.superRogueOverlay) {
+      this.superRogueOverlay.destroy();
+      this.superRogueOverlay = null;
     }
     if (this.monsterGroupOverlay) {
       this.monsterGroupOverlay.destroy();
@@ -659,6 +781,7 @@ export class GameManager {
     this.clearDraftOverlays();
     this.autoPlayEnabled = false;
     this.autoPlayTimer = 0;
+    this.autoJudgmentTurn = -1;
     this.mergeBonusPopT = -1;
 
     this.logic.restart();
@@ -688,13 +811,19 @@ export class GameManager {
   private handleMerge(from: number, to: number) {
     if (this.logic.getState().phase !== 'prepare' || !this.logic.getRunPool().length) return;
     const before = this.logic.getMergeAttackBonusPercent();
-    if (!this.logic.tryMerge(from, to)) return;
+    const mergedTier = this.logic.tryMerge(from, to);
+    if (mergedTier === null) return;
     if (this.logic.getMergeAttackBonusPercent() > before) {
       this.triggerMergeBonusPop();
     }
     this.syncControlView();
     this.control.showMergeAt(to);
     this.updateHud();
+    if (mergedTier === BallTier.TripleBig) {
+      this.logic.beginSuperRoguePick();
+      this.refreshDraftOverlay();
+      this.syncPresentation();
+    }
   }
 
   private handleLaunch(aimAngleRad?: number) {
@@ -743,7 +872,7 @@ export class GameManager {
 
   private onCombatFinished() {
     const phase = this.logic.getState().phase;
-    if (phase === 'victory' || phase === 'defeat') return;
+    if (phase === 'settled') return;
 
     this.updateHunterHud();
     this.logic.onCombatEndedStartSpawn();
@@ -757,10 +886,14 @@ export class GameManager {
           ...wallHits,
           ...specialHits,
         ]);
-        this.logic.onSpawnFinished(dmg);
+        this.logic.onSpawnFinished(
+          dmg,
+          this.battle.getSpawnRowOrdinal(),
+          this.battle.getBossesDefeated(),
+        );
         this.control.restoreBallsAfterLaunch();
-        if (this.logic.getState().phase === 'defeat') {
-          this.onDefeat();
+        if (this.logic.getState().phase === 'settled') {
+          this.onRunSettled();
           this.syncPresentation();
           return;
         }
@@ -783,8 +916,10 @@ export class GameManager {
     this.wallText.text = `城墙 ${state.wallHp} / ${state.wallMaxHp}`;
     const rowOrdinal = this.battle.getSpawnRowOrdinal();
     const nextBoss = getNextBossSpawnOrdinal(this.battle.getBossesDefeated());
+    const bossRowsLeft = Math.max(0, nextBoss - rowOrdinal);
     const bossTag = this.battle.isBossActive() ? ' · 首领战' : '';
-    this.turnText.text = `回合 ${state.turn} · 波次 ${rowOrdinal}${bossTag} · 下次首领 ${nextBoss}`;
+    this.turnText.text = `回合 ${state.turn} · 波次 ${rowOrdinal}${bossTag}`;
+    this.bossCountdownText.text = `首领倒计行数：${bossRowsLeft}`;
     this.mergeAttackBonusText.text = `合成攻击 +${state.mergeAttackBonusPercent}%`;
     const autoTag =
       this.autoPlayEnabled && state.phase === 'prepare' ? ' · 自动' : '';
@@ -800,19 +935,19 @@ export class GameManager {
       this.runBallEffectsText.text = '';
       this.runBallEffectsText.visible = false;
     }
-    this.layoutHudHintBelowBallEffects();
+    this.layoutLowerRightHud();
 
     this.phaseText.text =
-      state.phase === 'victory'
-        ? '阶段：通关！'
-        : state.phase === 'defeat'
-          ? '阶段：战败！城墙陷落'
-          : state.phase === 'monster_group_draft'
+      state.phase === 'settled'
+        ? '阶段：结算'
+        : state.phase === 'monster_group_draft'
           ? '阶段：怪物组四选一'
           : state.phase === 'draft'
             ? '阶段：球组三选一'
             : state.phase === 'rogue_skill_pick'
             ? '阶段：肉鸽选技能'
+            : state.phase === 'super_rogue_pick'
+            ? '阶段：超级肉鸽'
             : state.phase === 'prepare'
             ? `阶段：备战${autoTag}`
             : state.phase === 'spawn'

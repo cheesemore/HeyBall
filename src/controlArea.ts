@@ -34,7 +34,7 @@ const PAD = 10;
 
 /** 左侧金币显示 Y */
 const GOLD_LABEL_Y = 12;
-/** 招募 / 肉鸽按钮起始 Y（在金币下方） */
+/** 招募 / 终极大招按钮起始 Y（在金币下方） */
 const LEFT_BTN_TOP = 78;
 const BTN_GAP = 12;
 const BTN_H = 72;
@@ -184,7 +184,7 @@ export class ControlArea extends Container {
     if (priceText) {
       priceText.text = cost === null ? '已满' : String(cost);
     }
-    if (title) title.text = '肉鸽';
+    if (title) title.text = '终极大招';
     this.rogueBtn.alpha = disabled ? 0.45 : 1;
     this.rogueBtn.eventMode = disabled ? 'none' : 'static';
     this.rogueBtn.cursor = disabled ? 'default' : 'pointer';
@@ -206,7 +206,7 @@ export class ControlArea extends Container {
       () => this.onRecruit(),
     );
     this.rogueBtn = this.makePriceButton(
-      '肉鸽',
+      '终极大招',
       500,
       PAD,
       LEFT_BTN_TOP + BTN_H + BTN_GAP,

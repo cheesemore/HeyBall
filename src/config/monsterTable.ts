@@ -1,6 +1,10 @@
 import { BLOCK_BASE_HP } from './gameBalance';
 import { isSpecialMonsterType } from './specialMonsters';
-import { SPECIAL_MONSTER_TABLE, type SpecialMonsterKind } from './specialMonsters';
+import {
+  SPECIAL_MONSTER_BASE_HP,
+  SPECIAL_MONSTER_TABLE,
+  type SpecialMonsterKind,
+} from './specialMonsters';
 
 import { AIRDROP_BLUE_BASE_HP, AIRDROP_RED_BASE_HP } from './airdrop';
 
@@ -44,7 +48,13 @@ export type MonsterTypeId =
 
   | 'special_jump'
 
-  | 'special_summon';
+  | 'special_summon'
+
+  | 'special_shield'
+
+  | 'special_rebirth'
+
+  | 'special_regen';
 
 
 
@@ -172,6 +182,12 @@ export const MONSTER_TABLE: Record<MonsterTypeId, MonsterTypeRow> = {
 
   special_summon: rowForSpecial('summon'),
 
+  special_shield: rowForSpecial('shield'),
+
+  special_rebirth: rowForSpecial('rebirth'),
+
+  special_regen: rowForSpecial('regen'),
+
 };
 
 function rowForSpecial(kind: SpecialMonsterKind): MonsterTypeRow {
@@ -179,7 +195,7 @@ function rowForSpecial(kind: SpecialMonsterKind): MonsterTypeRow {
   return {
     id: s.typeId,
     name: s.name,
-    baseHp: BLOCK_BASE_HP,
+    baseHp: SPECIAL_MONSTER_BASE_HP,
     footprintW: 1,
     footprintH: 1,
     fillColor: s.shellColor,

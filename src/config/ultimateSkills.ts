@@ -46,3 +46,11 @@ export const ROGUE_SKILL_PICK_OPTIONS: UltimateSkillId[] = [
   'phase',
   'frost',
 ];
+
+/** 自动战斗：肉鸽大招默认选择 */
+export const AUTO_PLAY_ULTIMATE_SKILL: UltimateSkillId = 'judgment';
+
+/**
+ * 自动末日审判：自城墙起第 1～N 行内有怪则视为可放（row0 贴墙，第3行 = anchorRow 2）
+ */
+export const JUDGMENT_AUTO_TOP_ROW_COUNT = 3;

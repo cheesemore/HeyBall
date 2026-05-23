@@ -5,6 +5,7 @@ import type { LaunchBallUnit } from '../ballComposition';
 import type { MonsterTypeId } from '../config/monsterTable';
 
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
+import type { SuperRogueCardId } from '../config/superRogueCards';
 import type { UltimateChargeState } from './ultimateCharge';
 import type { MonsterGroupDraftOption } from './monsterGroupDraft';
 import type { RunMonsterGroupConfig } from './monsterGroupDraft';
@@ -17,10 +18,10 @@ export type GamePhase =
   | 'prepare'
   | 'combat'
   | 'spawn'
-  | 'victory'
-  | 'defeat'
+  | 'settled'
   | 'rogue_skill_pick'
-  | 'rogue_upgrade_pick';
+  | 'rogue_upgrade_pick'
+  | 'super_rogue_pick';
 
 
 
@@ -97,6 +98,25 @@ export interface GameState {
 
   judgmentPending: boolean;
 
+  /** 本局累计击杀数（结算展示） */
+  monstersKilled: number;
+
+  /** 城墙归零后的本局结算；进行中为 null */
+  settlement: RunSettlement | null;
+
+  /** 已选超级肉鸽（按选取顺序，右侧 HUD 逐条展示） */
+  superRoguePicks: SuperRogueCardId[];
+
+  /** 三选一候选（仅 super_rogue_pick 阶段有效） */
+  superRoguePickOptions: SuperRogueCardId[];
+}
+
+export interface RunSettlement {
+  /** 累计刷行波次（spawnRowOrdinal） */
+  waveOrdinal: number;
+  monstersKilled: number;
+  bossesDefeated: number;
+  turn: number;
 }
 
 

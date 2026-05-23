@@ -86,9 +86,19 @@ import {
   sfxWarlockPoisonTick,
   sfxWarriorSplit,
 } from '../audio/skillSfx';
-import { isAnchorCell, type BlockMonster } from './monster';
-import { getSpecialMonsterDef, isSpecialMonsterType } from '../config/specialMonsters';
+import {
+  createMonsterInstance,
+  isAnchorCell,
+  type BlockMonster,
+} from './monster';
+import {
+  ANNIHILATE_DESTROY_BALL_CHANCE,
+  REBIRTH_GRAY_BASE_HP,
+  getSpecialMonsterDef,
+  isSpecialMonsterType,
+} from '../config/specialMonsters';
 import { SpecialMonsterRuntime } from './specialMonsterRuntime';
+import { isBallFrontHitTowardWall } from './shieldBallHit';
 import {
   MONSTER_BIRTH_DURATION,
   startMonsterBirthAnim,
@@ -100,7 +110,12 @@ import {
   type SpecialEnemyAction,
 } from './specialMonsterTurnEnd';
 import { MonsterTooltip } from './monsterTooltip';
-import { collectUniqueMonsters, getFootprintAabb } from './monsterFootprint';
+import {
+  canPlaceFootprint,
+  collectUniqueMonsters,
+  getFootprintAabb,
+  placeFootprintPartial,
+} from './monsterFootprint';
 import {
   createEmptyGrid,
   damageBlock,
@@ -154,7 +169,6 @@ const LAUNCH_Y = battleLaunchLocalY();
 const BATTLE_TOP_LINE_Y = battleGridRowTopY(0);
 const SPAWN_LINE_LOCAL_Y = battleSpawnLineLocalY();
 const POISON_TICK_STAGGER_SEC = 0.045;
-const ANNIHILATE_DESTROY_BALL_CHANCE = 0.1;
 const SPECIAL_LINE_SEC = 0.22;
 const SPECIAL_JUMP_SEC = 0.36;
 const SPECIAL_ACTION_GAP_SEC = 0.05;
@@ -165,9 +179,6 @@ interface BlockView {
   hpText: Text;
   flashOverlay: Graphics;
   frostOverlay: Graphics | null;
-  chargeSweepOverlay: Graphics | null;
-  chargeSweepPhase: number;
-  chargeSweepColor: number;
   poisonBadgeBg: Graphics | null;
   poisonBadgeText: Text | null;
   flashTime: number;
@@ -536,12 +547,7 @@ export class BattleField extends Container {
 
   private applyFrozenToMonster(monster: BlockMonster): void {
     this.specialRuntime.setFrozen(monster.instanceId, true);
-    const kind = getSpecialMonsterDef(monster.typeId)?.kind;
-    if (kind === 'copy' || kind === 'summon') {
-      this.specialRuntime.interruptChargeIfCharging(monster.instanceId, 'frost');
-    }
     this.setFrostOverlay(monster.instanceId, true);
-    this.syncChargeSweepForInstance(monster.instanceId);
   }
 
   clearUltimateRoundState() {
@@ -574,7 +580,7 @@ export class BattleField extends Container {
     }));
   }
 
-  /** 首领击破：立刻结束战斗（不进入回合末刷怪） */
+  /** 强制中止战斗（重开等）；不触发 onCombatEnd */
   abortCombat() {
     this.combatActive = false;
     this.launchQueue = [];
@@ -616,7 +622,6 @@ export class BattleField extends Container {
     this.updateHunterVolley(dt);
     this.updateBlockFlashes(dt);
     this.updateBlockShakes(dt);
-    this.updateChargeSweeps(dt);
     this.updateJumpAnims(dt);
     this.updateBirthAnims(dt);
     this.updateSpecialTurnPlayback(dt);
@@ -832,9 +837,17 @@ export class BattleField extends Container {
       );
     }
 
+    let damage = hit.damage;
+    if (
+      getSpecialMonsterDef(monster.typeId)?.kind === 'shield' &&
+      isBallFrontHitTowardWall(monster, impactX, impactY, ball.vy)
+    ) {
+      damage = 1;
+    }
+
     this.flashMonster(monster);
-    this.fxLayer.spawn(popupX, popupY, hit.damage, popupStyle);
-    this.damageMonster(monster, hit.damage);
+    this.fxLayer.spawn(popupX, popupY, damage, popupStyle);
+    this.damageMonster(monster, damage);
 
     if (ball.color === 'purple') {
       const stacks = this.combatSession.addWarlockPoison(
@@ -1008,12 +1021,7 @@ export class BattleField extends Container {
     monster: BlockMonster,
     damage: number,
     reportUltimate = true,
-    interruptCharge = false,
   ) {
-    if (interruptCharge) {
-      this.specialRuntime.interruptChargeIfCharging(monster.instanceId, 'judgment');
-      this.syncChargeSweepForInstance(monster.instanceId);
-    }
     const cap = this.specialRuntime.invincibleDamageCap(monster.instanceId);
     const base = damage;
     const final =
@@ -1371,21 +1379,43 @@ export class BattleField extends Container {
   }
 
   private handleMonsterDestroyed(monster: BlockMonster) {
+    const rebirthAnchor =
+      getSpecialMonsterDef(monster.typeId)?.kind === 'rebirth'
+        ? { row: monster.anchorRow, col: monster.anchorCol }
+        : null;
+
     this.combatSession.clearWarlockPoison(monster.instanceId);
     this.specialRuntime.remove(monster.instanceId);
     killMonsterOnGrid(this.grid, monster);
     this.removeMonsterView(monster);
 
+    if (rebirthAnchor) {
+      this.spawnRebirthGrayAt(rebirthAnchor.row, rebirthAnchor.col);
+    }
+
     if (monster.typeId === 'boss') {
       this.spawnState.bossActive = false;
       this.spawnState.bossesDefeated += 1;
       this.onBossDefeated?.();
-      this.abortCombat();
-      return;
     }
 
     this.onMonsterKill?.(monster);
     if (this.ultimateChargeSuppress === 0) this.onUltimateKill?.();
+  }
+
+  private spawnRebirthGrayAt(anchorRow: number, anchorCol: number): void {
+    if (!canPlaceFootprint(this.grid, anchorRow, anchorCol, 1, 1)) return;
+    const growthStep = getMonsterGrowthStep(this.spawnState.spawnRowOrdinal);
+    const gray = createMonsterInstance(
+      'normal',
+      anchorRow,
+      anchorCol,
+      growthStep,
+      REBIRTH_GRAY_BASE_HP,
+    );
+    if (placeFootprintPartial(this.grid, gray) <= 0) return;
+    this.createBlockView(gray);
+    this.startSpawnBirthAnim(gray.instanceId);
   }
 
   private finishJudgmentPlayback() {
@@ -1416,7 +1446,7 @@ export class BattleField extends Container {
       if (m.hp <= 0) continue;
       const { x, y } = this.monsterCenter(m);
       this.fxLayer.spawn(x, y, jb.damage, 'normal');
-      this.damageMonster(m, jb.damage, false, true);
+      this.damageMonster(m, jb.damage, false);
     }
     this.triggerScreenShake?.(0.22, 12);
   }
@@ -1844,9 +1874,6 @@ export class BattleField extends Container {
       hpText,
       flashOverlay,
       frostOverlay: null,
-      chargeSweepOverlay: null,
-      chargeSweepPhase: 0,
-      chargeSweepColor: 0xffffff,
       poisonBadgeBg: null,
       poisonBadgeText: null,
       flashTime: 0,
@@ -1862,7 +1889,6 @@ export class BattleField extends Container {
       this.specialRuntime.onMonsterSpawned(m.instanceId, m.typeId);
     }
     this.updatePoisonBadge(m.instanceId);
-    this.syncChargeSweepForInstance(m.instanceId);
     root.y =
       battleGridRowTopY(m.anchorRow) +
       (this.monsterFallOffsetY.get(m.instanceId) ?? this.spawnSlideOffsetY);
@@ -2046,47 +2072,6 @@ export class BattleField extends Container {
     }
   }
 
-  private syncChargeSweepForInstance(instanceId: string): void {
-    const view = this.blockViews.get(instanceId);
-    const monster = this.findMonsterByInstanceId(instanceId);
-    if (!view || !monster) return;
-
-    const charging = this.specialRuntime.isCharging(instanceId);
-    if (!charging) {
-      view.chargeSweepOverlay?.destroy();
-      view.chargeSweepOverlay = null;
-      return;
-    }
-
-    const def = getSpecialMonsterDef(monster.typeId);
-    view.chargeSweepColor = def?.shellColor ?? 0xffffff;
-
-    if (!view.chargeSweepOverlay) {
-      const sweep = new Graphics();
-      view.shakeBody.addChild(sweep);
-      view.chargeSweepOverlay = sweep;
-      view.chargeSweepPhase = 0;
-    }
-    this.drawChargePulse(view, monster);
-  }
-
-  private drawChargePulse(view: BlockView, monster: BlockMonster): void {
-    const g = view.chargeSweepOverlay;
-    if (!g) return;
-    const w = monster.footprintW * MONSTER_SIZE;
-    const h = monster.footprintH * MONSTER_SIZE;
-    const pulse = 0.5 + 0.5 * Math.sin(view.chargeSweepPhase);
-    const innerW = w * 0.52;
-    const innerH = h * 0.52;
-    const ix = (w - innerW) / 2;
-    const iy = (h - innerH) / 2;
-    const color = view.chargeSweepColor;
-    g.clear();
-    g.roundRect(ix, iy, innerW, innerH, BLOCK_CORNER_RADIUS);
-    g.fill({ color, alpha: 0.2 + 0.5 * pulse });
-    g.stroke({ width: 2.5, color, alpha: 0.45 + 0.5 * pulse });
-  }
-
   private playWallDetonateExplosion(x: number, y: number, scale = 1): void {
     this.skillVfx.spawnWallDetonateExplosion(x, y, scale);
     this.triggerScreenShake?.(0.38, 18 * scale);
@@ -2099,12 +2084,6 @@ export class BattleField extends Container {
     const action = pb.actions[pb.index];
     if (!action) {
       this.finishSpecialTurnPlayback();
-      return;
-    }
-
-    if (action.kind === 'charge') {
-      this.syncChargeSweepForInstance(action.sourceId);
-      this.advanceSpecialTurnAction();
       return;
     }
 
@@ -2132,6 +2111,15 @@ export class BattleField extends Container {
       }
     } else if (action.kind === 'spawn') {
       sfxSpecialSpawn();
+      this.skillVfx.spawnColorLine(
+        action.fromX,
+        action.fromY,
+        action.toX,
+        action.toY,
+        action.color,
+      );
+    } else if (action.kind === 'regen') {
+      sfxSpecialHeal();
       this.skillVfx.spawnColorLine(
         action.fromX,
         action.fromY,
@@ -2186,6 +2174,16 @@ export class BattleField extends Container {
       this.startSpawnBirthAnim(action.spawnedId);
       pb.phase = 'wait';
       pb.timer = MONSTER_BIRTH_DURATION;
+      return;
+    }
+
+    if (action.kind === 'regen') {
+      this.fxLayer.spawnSkillText(action.toX, action.toY, '再生', action.color);
+      this.fxLayer.spawn(action.toX, action.toY, action.amount, 'heal');
+      const m = this.findMonsterByInstanceId(action.sourceId);
+      if (m) this.updateMonsterHp(m);
+      pb.phase = 'wait';
+      pb.timer = MONSTER_BIRTH_DURATION * 0.65;
       return;
     }
 
@@ -2288,18 +2286,4 @@ export class BattleField extends Container {
     }
   }
 
-  private updateChargeSweeps(dt: number): void {
-    for (const [id, view] of this.blockViews) {
-      if (!view.chargeSweepOverlay) continue;
-      if (!this.specialRuntime.isCharging(id)) {
-        view.chargeSweepOverlay.destroy();
-        view.chargeSweepOverlay = null;
-        continue;
-      }
-      const monster = this.findMonsterByInstanceId(id);
-      if (!monster) continue;
-      view.chargeSweepPhase += dt * 4.2;
-      this.drawChargePulse(view, monster);
-    }
-  }
 }
