@@ -93,7 +93,6 @@ import {
   FROST_DAMAGE_RATIO,
   FROST_DAMAGE_TAKEN_MULT,
   JUDGMENT_DAMAGE_RATIO,
-  JUDGMENT_WAVES,
   PHASE_CRIT_BONUS,
   PHASE_EXTRA_BOUNCES,
   PHASE_SPEED_MULT,
@@ -131,6 +130,7 @@ interface BlockView {
   frostOverlay: Graphics | null;
   chargeSweepOverlay: Graphics | null;
   chargeSweepPhase: number;
+  chargeSweepColor: number;
   poisonBadgeBg: Graphics | null;
   poisonBadgeText: Text | null;
   flashTime: number;
@@ -168,7 +168,7 @@ interface JumpAnimState {
 interface SpecialTurnPlayback {
   actions: SpecialEnemyAction[];
   index: number;
-  phase: 'line' | 'effect' | 'wait';
+  phase: 'line' | 'wait' | 'gap';
   timer: number;
   wallHits: BlockMonster[];
   onComplete: (wallHits: BlockMonster[]) => void;
@@ -182,6 +182,7 @@ export class BattleField extends Container {
   private readonly skillVfx = new SkillVfxLayer();
   private readonly ballLayer = new Container();
   private readonly monsterTooltip = new MonsterTooltip();
+  private readonly tipDismissLayer = new Graphics();
   readonly combatSession = new CombatSessionState();
   private readonly launchCone: LaunchCone;
   private onMonsterKill: ((monster: BlockMonster) => void) | null = null;
@@ -227,6 +228,7 @@ export class BattleField extends Container {
     stagger: number;
   } | null = null;
   private phaseBuffActive = false;
+  private mergeAttackBonusPercent = 0;
   private frostDamageMult = 1;
   private onUltimateDamage: ((amount: number) => void) | null = null;
   private onUltimateCollision: (() => void) | null = null;
@@ -238,6 +240,12 @@ export class BattleField extends Container {
     super();
     this.position.set(layout.battle.x, layout.battle.y);
     this.launchCone = new LaunchCone(LAUNCH_X, LAUNCH_Y);
+    this.tipDismissLayer.rect(0, 0, BATTLE_WIDTH, BATTLE_HEIGHT);
+    this.tipDismissLayer.fill({ color: 0x000000, alpha: 0.001 });
+    this.tipDismissLayer.visible = false;
+    this.tipDismissLayer.eventMode = 'none';
+    this.tipDismissLayer.on('pointertap', () => this.hideMonsterTip());
+    this.addChild(this.tipDismissLayer);
     this.addChild(this.blockLayer);
     this.coneLayer.addChild(this.launchCone);
     this.addChild(this.coneLayer);
@@ -246,9 +254,6 @@ export class BattleField extends Container {
     this.addChild(this.ultimateVfx);
     this.addChild(this.ballLayer);
     this.addChild(this.monsterTooltip);
-    this.eventMode = 'static';
-    this.hitArea = new Rectangle(0, 0, BATTLE_WIDTH, BATTLE_HEIGHT);
-    this.on('pointertap', () => this.monsterTooltip.hide());
     this.initBattle();
     this.showLaunchCone();
   }
@@ -264,7 +269,10 @@ export class BattleField extends Container {
       bossSpawned: false,
       specialTypeIds: [...this.runMonsterGroupSpecialIds],
     };
+    const savedSpecials = this.spawnState.specialTypeIds;
+    this.spawnState.specialTypeIds = [];
     fillRowsFromSpawn(this.grid, INITIAL_SPAWN_ROWS, this.spawnState);
+    this.spawnState.specialTypeIds = savedSpecials;
     this.refreshBlocks();
     this.initSpecialRuntimeForGrid();
   }
@@ -293,6 +301,7 @@ export class BattleField extends Container {
       this.updateMonsterHp(m);
       this.updatePoisonBadge(m.instanceId);
     }
+    this.hidePendingSpawnViews(actions);
 
     if (actions.length === 0) {
       onComplete(wallHits);
@@ -357,8 +366,12 @@ export class BattleField extends Container {
     this.ultimateChargeSuppress = Math.max(0, this.ultimateChargeSuppress - 1);
   }
 
-  /** 备战立刻发动末日审判（5 波），期间不计入充能 */
-  startJudgmentImmediate(attackSum: number, onComplete?: () => void) {
+  /** 备战立刻发动末日审判，期间不计入充能 */
+  startJudgmentImmediate(
+    attackSum: number,
+    waveCount: number,
+    onComplete?: () => void,
+  ) {
     if (attackSum <= 0) {
       onComplete?.();
       return;
@@ -370,7 +383,7 @@ export class BattleField extends Container {
     this.pushUltimateChargeSuppress();
     this.judgmentOnComplete = onComplete ?? null;
     this.judgmentPlayback = {
-      wavesLeft: JUDGMENT_WAVES,
+      wavesLeft: Math.max(1, waveCount),
       damage: waveDmg,
       stagger: 0.05,
     };
@@ -383,10 +396,10 @@ export class BattleField extends Container {
   }
 
   /** 备战发动冻狱：立刻全场伤害 + 暴雪与蓝罩，不计入充能 */
-  applyFrostUltimateStrike(attackSum: number) {
+  applyFrostUltimateStrike(attackSum: number, damageTakenMult: number) {
     const dmg = Math.max(1, Math.round(attackSum * FROST_DAMAGE_RATIO));
     this.pushUltimateChargeSuppress();
-    this.frostDamageMult = FROST_DAMAGE_TAKEN_MULT;
+    this.frostDamageMult = damageTakenMult;
     this.ultimateVfx.startBlizzard();
     for (const m of collectUniqueMonsters(this.grid)) {
       if (m.hp <= 0) continue;
@@ -398,18 +411,23 @@ export class BattleField extends Container {
     this.popUltimateChargeSuppress();
   }
 
+  private phaseCritBonus = PHASE_CRIT_BONUS;
+
   configureCombatUltimates(opts: {
     judgment: boolean;
     attackSum: number;
     phaseBuff: boolean;
+    phaseCritBonus?: number;
     frostDebuff: boolean;
+    frostDamageMult?: number;
   }) {
     this.phaseBuffActive = opts.phaseBuff;
+    this.phaseCritBonus = opts.phaseCritBonus ?? PHASE_CRIT_BONUS;
     if (opts.phaseBuff) {
       this.ultimateVfx.startPhaseSpace();
     }
     if (opts.frostDebuff) {
-      this.frostDamageMult = FROST_DAMAGE_TAKEN_MULT;
+      this.frostDamageMult = opts.frostDamageMult ?? FROST_DAMAGE_TAKEN_MULT;
       this.ultimateVfx.startBlizzard();
       for (const m of collectUniqueMonsters(this.grid)) {
         if (m.hp > 0) {
@@ -433,6 +451,7 @@ export class BattleField extends Container {
   clearUltimateRoundState() {
     this.judgmentPlayback = null;
     this.phaseBuffActive = false;
+    this.phaseCritBonus = PHASE_CRIT_BONUS;
     this.frostDamageMult = 1;
     this.ultimateVfx.stopPhaseSpace();
     this.ultimateVfx.stopBlizzard();
@@ -475,9 +494,11 @@ export class BattleField extends Container {
   launchBallsSequential(
     units: LaunchBallUnit[],
     aimAngleRad: number,
+    mergeAttackBonusPercent: number,
     onEnd: () => void,
   ) {
     if (this.combatActive || units.length === 0) return;
+    this.mergeAttackBonusPercent = mergeAttackBonusPercent;
     this.launchConeDismissed = false;
     this.launchCone.freezeAtAngle(aimAngleRad);
     this.combatActive = true;
@@ -555,20 +576,11 @@ export class BattleField extends Container {
 
       ball.vy += BALL_GRAVITY * subDt;
 
-      if (this.isPastSpawnLine(ball)) {
-        this.purgeBall(ball);
-        return;
-      }
-
       let nx = ball.x + ball.vx * subDt;
       let ny = ball.y + ball.vy * subDt;
 
-      if (ny + ball.radius >= SPAWN_LINE_LOCAL_Y) {
-        ball.x = nx;
-        ball.y = SPAWN_LINE_LOCAL_Y - ball.radius;
-        this.purgeBall(ball);
-        return;
-      }
+      const spawnClampY = SPAWN_LINE_LOCAL_Y - ball.radius;
+      if (ny > spawnClampY) ny = spawnClampY;
 
       if (nx < bounds.left) {
         nx = bounds.left;
@@ -584,12 +596,20 @@ export class BattleField extends Container {
         if (this.afterBounce(ball)) return;
       }
 
-      if (!ball.clearedTopLine && (ball.y >= BATTLE_TOP_LINE_Y || ny >= BATTLE_TOP_LINE_Y)) {
+      if (
+        !ball.clearedTopLine &&
+        (ball.y >= BATTLE_TOP_LINE_Y || ny >= BATTLE_TOP_LINE_Y)
+      ) {
         ball.clearedTopLine = true;
       }
 
-      if (ball.clearedTopLine && ny < bounds.top) {
-        ny = bounds.top;
+      const yellowCeilingY = BATTLE_TOP_LINE_Y + ball.radius;
+      if (
+        ball.clearedTopLine &&
+        ball.vy < 0 &&
+        ny < yellowCeilingY
+      ) {
+        ny = yellowCeilingY;
         ball.vy = Math.abs(ball.vy);
         ball.x = nx;
         ball.y = ny;
@@ -627,15 +647,18 @@ export class BattleField extends Container {
         if (this.afterBounce(ball)) return;
       }
 
+      if (!ball.alive) return;
+
       ball.x = nx;
       ball.y = ny;
+
+      if (ball.y >= spawnClampY - 0.5) {
+        this.purgeBall(ball);
+        return;
+      }
     }
 
     if (ball.alive) ball.syncView();
-  }
-
-  private isPastSpawnLine(ball: BallEntity): boolean {
-    return ball.y + ball.radius >= SPAWN_LINE_LOCAL_Y;
   }
 
   private hasActiveSlotBalls(): boolean {
@@ -674,7 +697,7 @@ export class BattleField extends Container {
       getSpecialMonsterDef(monster.typeId)?.kind === 'annihilate' &&
       Math.random() < ANNIHILATE_DESTROY_BALL_CHANCE
     ) {
-      this.fxLayer.spawn(popupX, popupY, 0, 'normal');
+      this.fxLayer.spawnSkillText(popupX, popupY, '湮灭!', 0xce93d8);
       this.purgeBall(ball);
       return;
     }
@@ -856,9 +879,11 @@ export class BattleField extends Container {
       this.syncChargeSweepForInstance(monster.instanceId);
     }
     const cap = this.specialRuntime.invincibleDamageCap(monster.instanceId);
-    let base = damage;
-    if (cap !== null) base = Math.min(base, cap);
-    const final = Math.max(1, Math.round(base * this.frostDamageMult));
+    const base = damage;
+    const final =
+      cap !== null
+        ? cap
+        : Math.max(1, Math.round(base * this.frostDamageMult));
     if (reportUltimate && this.ultimateChargeSuppress === 0) {
       this.onUltimateDamage?.(final);
     }
@@ -1405,7 +1430,11 @@ export class BattleField extends Container {
     const unit = this.launchQueue.shift();
     if (!unit) return;
 
-    const stats = getBallCombatStats(unit.color, unit.isBig);
+    const stats = getBallCombatStats(
+      unit.color,
+      unit.isBig,
+      this.mergeAttackBonusPercent,
+    );
     const angle = this.launchCone.randomLaunchAngle();
     const speed = stats.speed;
     const vx = Math.cos(angle) * speed;
@@ -1416,7 +1445,7 @@ export class BattleField extends Container {
     let speedMult = 1;
     if (this.phaseBuffActive) {
       maxBounces += PHASE_EXTRA_BOUNCES;
-      critRate = Math.min(1, critRate + PHASE_CRIT_BONUS);
+      critRate = Math.min(1, critRate + this.phaseCritBonus);
       speedMult = PHASE_SPEED_MULT;
     }
 
@@ -1432,7 +1461,11 @@ export class BattleField extends Container {
       critRate,
       CRIT_DAMAGE_MULTIPLIER,
     );
-    const smallStats = getBallCombatStats(unit.color, false);
+    const smallStats = getBallCombatStats(
+      unit.color,
+      false,
+      this.mergeAttackBonusPercent,
+    );
     if (unit.color === 'green') {
       this.combatSession.registerHunterBall(smallStats.attack);
     }
@@ -1518,8 +1551,20 @@ export class BattleField extends Container {
     this.onCombatEnd = null;
   }
 
-  private refreshBlocks() {
+  private hideMonsterTip(): void {
     this.monsterTooltip.hide();
+    this.tipDismissLayer.visible = false;
+    this.tipDismissLayer.eventMode = 'none';
+  }
+
+  private syncTipDismissLayer(): void {
+    const on = this.monsterTooltip.isShowing();
+    this.tipDismissLayer.visible = on;
+    this.tipDismissLayer.eventMode = on ? 'static' : 'none';
+  }
+
+  private refreshBlocks() {
+    this.hideMonsterTip();
     for (const [, v] of this.blockViews) v.root.destroy();
     this.blockViews.clear();
     this.blockLayer.removeChildren();
@@ -1559,6 +1604,7 @@ export class BattleField extends Container {
         root.y + h / 2 + extra,
         h,
       );
+      this.syncTipDismissLayer();
     });
 
     const shakeBody = new Container();
@@ -1613,6 +1659,7 @@ export class BattleField extends Container {
       frostOverlay: null,
       chargeSweepOverlay: null,
       chargeSweepPhase: 0,
+      chargeSweepColor: 0xffffff,
       poisonBadgeBg: null,
       poisonBadgeText: null,
       flashTime: 0,
@@ -1745,6 +1792,14 @@ export class BattleField extends Container {
     this.blockViews.delete(monster.instanceId);
   }
 
+  private hidePendingSpawnViews(actions: SpecialEnemyAction[]): void {
+    for (const action of actions) {
+      if (action.kind !== 'spawn') continue;
+      const view = this.blockViews.get(action.spawnedId);
+      if (view) view.root.visible = false;
+    }
+  }
+
   private syncChargeSweepForInstance(instanceId: string): void {
     const view = this.blockViews.get(instanceId);
     const monster = this.findMonsterByInstanceId(instanceId);
@@ -1757,17 +1812,33 @@ export class BattleField extends Container {
       return;
     }
 
-    if (view.chargeSweepOverlay) return;
+    const def = getSpecialMonsterDef(monster.typeId);
+    view.chargeSweepColor = def?.shellColor ?? 0xffffff;
 
+    if (!view.chargeSweepOverlay) {
+      const sweep = new Graphics();
+      view.shakeBody.addChild(sweep);
+      view.chargeSweepOverlay = sweep;
+      view.chargeSweepPhase = 0;
+    }
+    this.drawChargePulse(view, monster);
+  }
+
+  private drawChargePulse(view: BlockView, monster: BlockMonster): void {
+    const g = view.chargeSweepOverlay;
+    if (!g) return;
     const w = monster.footprintW * MONSTER_SIZE;
     const h = monster.footprintH * MONSTER_SIZE;
-    const pad = 2;
-    const sweep = new Graphics();
-    sweep.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
-    sweep.fill({ color: 0xffffff, alpha: 0.35 });
-    view.shakeBody.addChild(sweep);
-    view.chargeSweepOverlay = sweep;
-    view.chargeSweepPhase = 0;
+    const pulse = 0.5 + 0.5 * Math.sin(view.chargeSweepPhase);
+    const innerW = w * 0.52;
+    const innerH = h * 0.52;
+    const ix = (w - innerW) / 2;
+    const iy = (h - innerH) / 2;
+    const color = view.chargeSweepColor;
+    g.clear();
+    g.roundRect(ix, iy, innerW, innerH, BLOCK_CORNER_RADIUS);
+    g.fill({ color, alpha: 0.2 + 0.5 * pulse });
+    g.stroke({ width: 2.5, color, alpha: 0.45 + 0.5 * pulse });
   }
 
   private playWallDetonateExplosion(x: number, y: number, scale = 1): void {
@@ -1831,9 +1902,9 @@ export class BattleField extends Container {
     if (!pb) return;
 
     const action = pb.actions[pb.index]!;
-    pb.phase = 'effect';
 
     if (action.kind === 'heal') {
+      this.fxLayer.spawnSkillText(action.fromX, action.fromY, '治疗!', action.color);
       for (const t of action.targets) {
         this.fxLayer.spawn(t.x, t.y, t.amount, 'heal');
         const m = this.findMonsterByInstanceId(t.instanceId);
@@ -1858,10 +1929,18 @@ export class BattleField extends Container {
     }
 
     if (action.kind === 'spawn') {
+      const src = this.findMonsterByInstanceId(action.sourceId);
+      const sk = src ? getSpecialMonsterDef(src.typeId)?.kind : null;
+      const label = sk === 'copy' ? '复制!' : '召唤!';
+      this.fxLayer.spawnSkillText(action.toX, action.toY, label, action.color);
       this.startSpawnBirthAnim(action.spawnedId);
       pb.phase = 'wait';
       pb.timer = MONSTER_BIRTH_DURATION;
+      return;
     }
+
+    pb.phase = 'wait';
+    pb.timer = 0;
   }
 
   private startJumpAnim(
@@ -1888,6 +1967,7 @@ export class BattleField extends Container {
     const view = this.blockViews.get(instanceId);
     const monster = this.findMonsterByInstanceId(instanceId);
     if (!view || !monster) return;
+    view.root.visible = true;
     const w = monster.footprintW * MONSTER_SIZE;
     const h = monster.footprintH * MONSTER_SIZE;
     const anim = startMonsterBirthAnim(view.shakeBody, w, h);
@@ -1902,7 +1982,7 @@ export class BattleField extends Container {
       this.finishSpecialTurnPlayback();
       return;
     }
-    pb.phase = 'line';
+    pb.phase = 'gap';
     pb.timer = SPECIAL_ACTION_GAP_SEC;
   }
 
@@ -1918,6 +1998,12 @@ export class BattleField extends Container {
   private updateSpecialTurnPlayback(dt: number): void {
     const pb = this.specialTurnPlayback;
     if (!pb) return;
+
+    if (pb.phase === 'gap') {
+      pb.timer -= dt;
+      if (pb.timer <= 0) this.beginSpecialTurnAction();
+      return;
+    }
 
     if (pb.phase === 'line') {
       pb.timer -= dt;
@@ -1960,9 +2046,10 @@ export class BattleField extends Container {
         view.chargeSweepOverlay = null;
         continue;
       }
-      view.chargeSweepPhase += dt * 5;
-      view.chargeSweepOverlay.alpha =
-        0.22 + 0.28 * (0.5 + 0.5 * Math.sin(view.chargeSweepPhase));
+      const monster = this.findMonsterByInstanceId(id);
+      if (!monster) continue;
+      view.chargeSweepPhase += dt * 4.2;
+      this.drawChargePulse(view, monster);
     }
   }
 }

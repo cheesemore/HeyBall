@@ -82,8 +82,34 @@ function makeDamageText(damage: number, style: PopupStyle): Text {
   });
 }
 
+interface SkillPopupEntry {
+  text: Text;
+  age: number;
+  vy: number;
+}
+
 export class DamagePopupLayer extends Container {
   private readonly entries: PopupEntry[] = [];
+  private readonly skillEntries: SkillPopupEntry[] = [];
+
+  /** 技能名瓢字（复制/召唤/治疗/湮灭） */
+  spawnSkillText(x: number, y: number, label: string, fill: number) {
+    const t = new Text({
+      text: label,
+      style: {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize: 34,
+        fill,
+        fontWeight: 'bold',
+        stroke: { color: 0xffffff, width: 2, join: 'round' },
+      },
+    });
+    t.anchor.set(0.5);
+    t.position.set(x, y - 28);
+    t.scale.set(START_SCALE);
+    this.addChild(t);
+    this.skillEntries.push({ text: t, age: 0, vy: -85 });
+  }
 
   spawn(x: number, y: number, damage: number, style: PopupStyle = 'normal') {
     const angle = Math.random() * Math.PI * 2;
@@ -104,6 +130,19 @@ export class DamagePopupLayer extends Container {
   }
 
   update(dt: number) {
+    for (let i = this.skillEntries.length - 1; i >= 0; i--) {
+      const e = this.skillEntries[i]!;
+      e.age += dt;
+      e.text.y += e.vy * dt;
+      e.vy *= Math.exp(-DRAG * dt);
+      e.text.scale.set(popupScale(e.age, 'normal'));
+      e.text.alpha = popupAlpha(e.age);
+      if (e.age >= POPUP_DURATION) {
+        e.text.destroy();
+        this.skillEntries.splice(i, 1);
+      }
+    }
+
     for (let i = this.entries.length - 1; i >= 0; i--) {
       const e = this.entries[i]!;
       e.age += dt;
@@ -124,5 +163,7 @@ export class DamagePopupLayer extends Container {
   clear(): void {
     for (const e of this.entries) e.text.destroy();
     this.entries.length = 0;
+    for (const e of this.skillEntries) e.text.destroy();
+    this.skillEntries.length = 0;
   }
 }

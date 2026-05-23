@@ -187,17 +187,19 @@ export class UltimateVfxLayer extends Container {
     g.clear();
     const top = battleGridRowTopY(0);
     const bottom = battleSpawnLineLocalY();
-    const count = 24;
+    const zoneH = bottom - top;
+    const count = 28;
     for (let i = 0; i < count; i++) {
-      const x = (i / count) * BATTLE_WIDTH + (e.age * 40) % 40;
-      const len = 40 + (i % 5) * 18;
-      const y = top + ((e.age * 180 + i * 37) % (bottom - top - len));
+      const x = ((i + 0.5) / count) * BATTLE_WIDTH;
+      const len = 36 + (i % 5) * 16;
+      const travel = Math.max(1, zoneH - len);
+      const y = top + ((e.age * 220 + i * 41) % travel);
       const hue = (i * 47 + e.age * 80) % 360;
       const color =
         hue < 120 ? 0xff66aa : hue < 240 ? 0x66aaff : 0xffcc55;
       g.moveTo(x, y);
-      g.lineTo(x + (i % 2 === 0 ? 8 : -8), y + len);
-      g.stroke({ width: 2, color, alpha: 0.35 });
+      g.lineTo(x, y + len);
+      g.stroke({ width: 2, color, alpha: 0.38 });
     }
   }
 

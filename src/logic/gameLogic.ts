@@ -16,8 +16,6 @@ import {
 
   createEmptyControlSlots,
 
-  INITIAL_GOLD,
-
 } from './controlGrid';
 
 import { createRunDraft } from './runDraft';
@@ -27,6 +25,9 @@ import {
   type RunMonsterGroupConfig,
 } from './monsterGroupDraft';
 
+import type { RogueUpgradeId } from '../config/rogueUpgrades';
+import { listAvailableRogueUpgrades } from '../config/rogueUpgrades';
+import { MONSTER_GROUP_DIFFICULTIES } from '../config/monsterGroup';
 import type { UltimateSkillId } from '../config/ultimateSkills';
 import { ULTIMATE_SKILLS } from '../config/ultimateSkills';
 
@@ -36,10 +37,17 @@ import {
   addFrostCharge,
   addJudgmentCharge,
   addPhaseCharge,
+  consumeUltimateCharge,
   createUltimateChargeState,
-  getChargeMax,
   isUltimateReady,
 } from './ultimateCharge';
+import {
+  computeUltimateModifiers,
+  getFrostDamageTakenMult,
+  getJudgmentWaveCount,
+  getPhaseCritBonus,
+  type UltimateRunModifiers,
+} from './ultimateModifiers';
 
 import type { GameState, LaunchPayload, MonsterSnapshot } from './types';
 
@@ -61,9 +69,11 @@ export function createInitialGameState(): GameState {
 
     wallMaxHp: WALL_MAX_HP,
 
-    gold: INITIAL_GOLD,
+    gold: 0,
 
     recruitCount: 0,
+
+    mergeAttackBonusPercent: 0,
 
     controlSlots: createEmptyControlSlots(),
 
@@ -78,6 +88,8 @@ export function createInitialGameState(): GameState {
     runMonsterGroup: null,
 
     roguePurchaseCount: 0,
+
+    rogueUpgradeIds: [],
 
     ultimate: createUltimateChargeState(),
 
@@ -174,6 +186,8 @@ export class GameLogic {
       runMonsterGroup: configFromOption(opt),
 
       draftOptions: ballDraft.options,
+
+      gold: MONSTER_GROUP_DIFFICULTIES[opt.difficulty].startingGold,
 
     });
 
@@ -289,10 +303,18 @@ export class GameLogic {
 
     if (!result) return false;
 
-    this.patch({ controlSlots: result.slots });
+    this.patch({
+      controlSlots: result.slots,
+      mergeAttackBonusPercent:
+        this.state.mergeAttackBonusPercent + result.attackBonusPercentAdd,
+    });
 
     return true;
 
+  }
+
+  getMergeAttackBonusPercent(): number {
+    return this.state.mergeAttackBonusPercent;
   }
 
 
@@ -314,6 +336,15 @@ export class GameLogic {
       return true;
     }
 
+    if (spent.needsUpgradePick) {
+      this.patch({
+        gold: spent.gold,
+        roguePurchaseCount: spent.purchaseCount,
+        phase: 'rogue_upgrade_pick',
+      });
+      return true;
+    }
+
     this.patch({
       gold: spent.gold,
       roguePurchaseCount: spent.purchaseCount,
@@ -330,6 +361,7 @@ export class GameLogic {
     this.patch({
       phase: 'prepare',
       ultimate,
+      rogueUpgradeIds: [],
       phaseBuffPending: false,
       frostDebuffPending: false,
       judgmentPending: false,
@@ -337,18 +369,62 @@ export class GameLogic {
     return true;
   }
 
+  selectRogueUpgrade(upgradeId: RogueUpgradeId): boolean {
+    if (this.state.phase !== 'rogue_upgrade_pick') return false;
+    const skill = this.state.ultimate.skill;
+    if (!skill) return false;
+    const available = listAvailableRogueUpgrades(
+      skill,
+      this.state.rogueUpgradeIds,
+    );
+    if (!available.some((u) => u.id === upgradeId)) return false;
+    this.patch({
+      phase: 'prepare',
+      rogueUpgradeIds: [...this.state.rogueUpgradeIds, upgradeId],
+    });
+    return true;
+  }
 
+  getRogueUpgradePickOptions() {
+    const skill = this.state.ultimate.skill;
+    if (!skill) return [];
+    return listAvailableRogueUpgrades(skill, this.state.rogueUpgradeIds);
+  }
+
+  private getUltimateMods(): UltimateRunModifiers | null {
+    const skill = this.state.ultimate.skill;
+    if (!skill) return null;
+    return computeUltimateModifiers(skill, this.state.rogueUpgradeIds);
+  }
+
+  getJudgmentWaveCount(): number {
+    return getJudgmentWaveCount(this.state.rogueUpgradeIds);
+  }
+
+  getPhaseCritBonus(): number {
+    return getPhaseCritBonus(this.state.rogueUpgradeIds);
+  }
+
+  getFrostDamageTakenMult(): number {
+    return getFrostDamageTakenMult(this.state.rogueUpgradeIds);
+  }
 
   tryActivateUltimate(): boolean {
-    if (this.state.phase !== 'prepare' || !isUltimateReady(this.state.ultimate)) {
+    const mods = this.getUltimateMods();
+    if (
+      this.state.phase !== 'prepare' ||
+      !mods ||
+      !isUltimateReady(this.state.ultimate, mods)
+    ) {
       return false;
     }
     const skill = this.state.ultimate.skill;
     if (!skill) return false;
 
-    const next: Partial<GameState> = {
-      ultimate: { ...this.state.ultimate, progress: 0 },
-    };
+    const ultimate = { ...this.state.ultimate };
+    consumeUltimateCharge(ultimate, mods);
+
+    const next: Partial<GameState> = { ultimate };
 
     if (skill === 'phase') {
       next.phaseBuffPending = true;
@@ -367,7 +443,9 @@ export class GameLogic {
 
 
   isUltimateReady(): boolean {
-    return isUltimateReady(this.state.ultimate);
+    const mods = this.getUltimateMods();
+    if (!mods) return false;
+    return isUltimateReady(this.state.ultimate, mods);
   }
 
 
@@ -380,11 +458,14 @@ export class GameLogic {
     name: string;
   } {
     const skill = this.state.ultimate.skill;
+    const mods = skill
+      ? computeUltimateModifiers(skill, this.state.rogueUpgradeIds)
+      : null;
     return {
       skill,
       progress: this.state.ultimate.progress,
-      max: skill ? getChargeMax(skill) : 0,
-      ready: isUltimateReady(this.state.ultimate),
+      max: mods?.chargeMax ?? 0,
+      ready: mods ? isUltimateReady(this.state.ultimate, mods) : false,
       name: skill ? ULTIMATE_SKILLS[skill].name : '',
     };
   }
@@ -392,27 +473,30 @@ export class GameLogic {
 
 
   addUltimateDamageCharge(damage: number) {
-    if (this.state.ultimate.skill !== 'judgment') return;
+    const mods = this.getUltimateMods();
+    if (!mods || this.state.ultimate.skill !== 'judgment') return;
     const ultimate = { ...this.state.ultimate };
-    addJudgmentCharge(ultimate, damage);
+    addJudgmentCharge(ultimate, damage, mods);
     this.patch({ ultimate });
   }
 
 
 
   addUltimateCollisionCharge(count = 1) {
-    if (this.state.ultimate.skill !== 'phase') return;
+    const mods = this.getUltimateMods();
+    if (!mods || this.state.ultimate.skill !== 'phase') return;
     const ultimate = { ...this.state.ultimate };
-    addPhaseCharge(ultimate, count);
+    addPhaseCharge(ultimate, count, mods);
     this.patch({ ultimate });
   }
 
 
 
   addUltimateKillCharge(kills = 1) {
-    if (this.state.ultimate.skill !== 'frost') return;
+    const mods = this.getUltimateMods();
+    if (!mods || this.state.ultimate.skill !== 'frost') return;
     const ultimate = { ...this.state.ultimate };
-    addFrostCharge(ultimate, kills);
+    addFrostCharge(ultimate, kills, mods);
     this.patch({ ultimate });
   }
 

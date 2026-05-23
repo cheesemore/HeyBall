@@ -1,4 +1,4 @@
-import type { BallColor } from '../ballTypes';
+import { BALL_COLOR_LABEL, type BallColor } from '../ballTypes';
 
 /** @deprecated 三选一请用 BALL_COLOR_LABEL */
 export const BALL_DRAFT_COLOR_NAME: Record<BallColor, string> = {
@@ -25,3 +25,10 @@ export const BALL_SKILL_DESC: Record<BallColor, string> = {
 };
 
 export const DRAFT_OPTION_SIZE = 4;
+
+/** 本局已选球组效果（右侧 HUD，每条一行） */
+export function formatRunBallEffectsLines(colors: readonly BallColor[]): string {
+  return colors
+    .map((c) => `${BALL_COLOR_LABEL[c]}：${BALL_SKILL_DESC[c]}`)
+    .join('\n');
+}

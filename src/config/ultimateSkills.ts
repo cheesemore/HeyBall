@@ -21,14 +21,14 @@ export const ULTIMATE_SKILLS: Record<UltimateSkillId, UltimateSkillDef> = {
     name: '相位空间',
     shortDesc: '本回合撞击+20、暴击+10%、速度+100%',
     chargeLabel: '撞击充能（含撞墙）',
-    chargeMax: 20_000,
+    chargeMax: 10_000,
   },
   frost: {
     id: 'frost',
     name: '冻狱冥啸',
     shortDesc: '全场50%攻击总和伤害，本回合受伤+50%',
     chargeLabel: '击杀充能',
-    chargeMax: 100,
+    chargeMax: 120,
   },
 };
 

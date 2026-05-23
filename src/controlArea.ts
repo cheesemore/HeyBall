@@ -107,7 +107,7 @@ export class ControlArea extends Container {
     this.drawBackground(width, height);
     this.createGoldLabel();
     this.createLeftButtons();
-    this.createLaunchButton(width, height, ULTIMATE_PANEL_ABOVE_LAUNCH + 8);
+    this.createLaunchButton(width, height, ULTIMATE_PANEL_ABOVE_LAUNCH + 18);
 
     this.gridRoot = new Container();
     this.gridRoot.position.set(LEFT_W + PAD, PAD);

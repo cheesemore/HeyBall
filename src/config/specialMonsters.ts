@@ -22,6 +22,9 @@ export interface SpecialMonsterDef {
   innerColor: number;
 }
 
+/** 单个治疗怪每回合最多治疗目标数 */
+export const HEAL_MAX_TARGETS_PER_CAST = 3;
+
 export const SPECIAL_MONSTER_KINDS: SpecialMonsterKind[] = [
   'copy',
   'invincible',
@@ -56,7 +59,8 @@ export const SPECIAL_MONSTER_TABLE: Record<SpecialMonsterKind, SpecialMonsterDef
       kind: 'heal',
       typeId: 'special_heal',
       name: '恢复',
-      effectBrief: '回合末为最前排未满血砖块回复自身30%最大生命；冰封不发动',
+      effectBrief:
+        '回合末为最前排最多3个未满血砖块各回复自身30%最大生命；冰封不发动',
       shellColor: 0x43a047,
       shellStroke: 0x2e7d32,
       innerColor: 0xd6d6d6,

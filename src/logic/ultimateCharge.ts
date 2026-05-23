@@ -1,5 +1,5 @@
 import type { UltimateSkillId } from '../config/ultimateSkills';
-import { ULTIMATE_SKILLS } from '../config/ultimateSkills';
+import type { UltimateRunModifiers } from './ultimateModifiers';
 
 export interface UltimateChargeState {
   skill: UltimateSkillId | null;
@@ -10,39 +10,59 @@ export function createUltimateChargeState(): UltimateChargeState {
   return { skill: null, progress: 0 };
 }
 
-export function getChargeMax(skill: UltimateSkillId): number {
-  return ULTIMATE_SKILLS[skill].chargeMax;
-}
-
-export function isUltimateReady(state: UltimateChargeState): boolean {
+export function isUltimateReady(
+  state: UltimateChargeState,
+  mods: UltimateRunModifiers,
+): boolean {
   if (!state.skill) return false;
-  return state.progress >= getChargeMax(state.skill);
+  return state.progress >= mods.chargeMax;
 }
 
-export function addJudgmentCharge(state: UltimateChargeState, damage: number): void {
+export function addJudgmentCharge(
+  state: UltimateChargeState,
+  damage: number,
+  mods: UltimateRunModifiers,
+): void {
   if (state.skill !== 'judgment') return;
-  state.progress = Math.min(
-    getChargeMax('judgment'),
-    state.progress + damage,
-  );
+  if (mods.overcapStorage) {
+    state.progress += damage;
+  } else {
+    state.progress = Math.min(
+      mods.chargeMax,
+      state.progress + damage,
+    );
+  }
 }
 
-export function addPhaseCharge(state: UltimateChargeState, hits = 1): void {
+export function addPhaseCharge(
+  state: UltimateChargeState,
+  hits: number,
+  mods: UltimateRunModifiers,
+): void {
   if (state.skill !== 'phase') return;
-  state.progress = Math.min(
-    getChargeMax('phase'),
-    state.progress + hits,
-  );
+  if (mods.overcapStorage) {
+    state.progress += hits;
+  } else {
+    state.progress = Math.min(mods.chargeMax, state.progress + hits);
+  }
 }
 
-export function addFrostCharge(state: UltimateChargeState, kills = 1): void {
+export function addFrostCharge(
+  state: UltimateChargeState,
+  kills: number,
+  mods: UltimateRunModifiers,
+): void {
   if (state.skill !== 'frost') return;
-  state.progress = Math.min(
-    getChargeMax('frost'),
-    state.progress + kills,
-  );
+  if (mods.overcapStorage) {
+    state.progress += kills;
+  } else {
+    state.progress = Math.min(mods.chargeMax, state.progress + kills);
+  }
 }
 
-export function consumeUltimateCharge(state: UltimateChargeState): void {
-  state.progress = 0;
+export function consumeUltimateCharge(
+  state: UltimateChargeState,
+  mods: UltimateRunModifiers,
+): void {
+  state.progress = Math.max(0, state.progress - mods.chargeMax);
 }

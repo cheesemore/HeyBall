@@ -26,7 +26,7 @@ export class BallEntity {
   readonly canSplit: boolean;
   /** 槽位发射球 false；分裂球 true */
   readonly isTemporary: boolean;
-  /** 首次从发射区向下穿过战场顶线（y=0）之前，忽略顶部墙碰撞 */
+  /** 已进入黄线下方的战场区；为 true 后上弹至黄线（~100px）会反弹下落 */
   clearedTopLine: boolean;
   bounces = 0;
   x: number;

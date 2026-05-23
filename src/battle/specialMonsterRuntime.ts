@@ -92,8 +92,9 @@ export class SpecialMonsterRuntime {
     return 1;
   }
 
-  tickInvincibleEndOfTurn(): void {
-    for (const e of this.entries.values()) {
+  tickInvincibleEndOfTurn(skipInstanceIds?: ReadonlySet<string>): void {
+    for (const [id, e] of this.entries) {
+      if (skipInstanceIds?.has(id)) continue;
       if (e.invincibleTurnsLeft > 0) e.invincibleTurnsLeft--;
     }
   }

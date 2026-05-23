@@ -1,9 +1,12 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { formatRunBallEffectsLines } from '../config/ballCatalog';
 import { getRecruitCost } from '../config/recruitCost';
 import { getRogueShopPrice, ROGUE_SHOP_MAX_PURCHASES } from '../config/rogueShop';
+import type { RogueUpgradeId } from '../config/rogueUpgrades';
 import type { UltimateSkillId } from '../config/ultimateSkills';
 import { sumAttackFromSlots } from '../logic/ballAttackSum';
 import { RogueSkillPickScreen } from './rogueSkillPickScreen';
+import { RogueUpgradePickScreen } from './rogueUpgradePickScreen';
 import { UltimateSkillPanel } from './ultimateSkillPanel';
 import { BattleField } from '../battle/battleField';
 import { ControlArea, CONTROL_RIGHT_W } from '../controlArea';
@@ -36,6 +39,7 @@ export class GameManager {
   private readonly root: Container;
   private draftOverlay: DraftScreen | null = null;
   private rogueSkillOverlay: RogueSkillPickScreen | null = null;
+  private rogueUpgradeOverlay: RogueUpgradePickScreen | null = null;
   private monsterGroupOverlay: MonsterGroupPickScreen | null = null;
   private readonly ultimatePanel: UltimateSkillPanel;
   private autoPlayEnabled = false;
@@ -44,7 +48,11 @@ export class GameManager {
 
   private wallText!: Text;
   private turnText!: Text;
+  private mergeAttackBonusText!: Text;
+  private mergeBonusPopT = -1;
   private phaseText!: Text;
+  private runBallEffectsText!: Text;
+  private hudHintText!: Text;
 
   constructor(root: Container) {
     this.root = root;
@@ -136,6 +144,27 @@ export class GameManager {
       this.rogueSkillOverlay = null;
     }
 
+    if (state.phase === 'rogue_upgrade_pick') {
+      const options = this.logic.getRogueUpgradePickOptions();
+      if (this.rogueUpgradeOverlay) {
+        this.rogueUpgradeOverlay.destroy();
+        this.rogueUpgradeOverlay = null;
+      }
+      this.rogueUpgradeOverlay = new RogueUpgradePickScreen(options, (id) =>
+        this.pickRogueUpgrade(id),
+      );
+      this.root.addChild(this.rogueUpgradeOverlay);
+      this.control.setInteractable(false);
+      this.battle.visible = false;
+      this.rightPanel.visible = false;
+      return;
+    }
+
+    if (this.rogueUpgradeOverlay) {
+      this.rogueUpgradeOverlay.destroy();
+      this.rogueUpgradeOverlay = null;
+    }
+
     if (state.phase === 'monster_group_draft') {
       if (!this.monsterGroupOverlay) {
         this.monsterGroupOverlay = new MonsterGroupPickScreen(
@@ -182,6 +211,12 @@ export class GameManager {
 
   private pickRogueSkill(skill: UltimateSkillId) {
     if (!this.logic.selectUltimateSkill(skill)) return;
+    this.refreshDraftOverlay();
+    this.syncPresentation();
+  }
+
+  private pickRogueUpgrade(id: RogueUpgradeId) {
+    if (!this.logic.selectRogueUpgrade(id)) return;
     this.refreshDraftOverlay();
     this.syncPresentation();
   }
@@ -323,16 +358,54 @@ export class GameManager {
     this.wallText = new Text({ text: '', style: { ...style, fontSize: 20, fill: 0xff8888 } });
     this.turnText = new Text({ text: '', style });
     this.turnText.position.set(0, 36);
-    this.phaseText = new Text({ text: '', style: { ...style, fontSize: 16, fill: 0x8ab4e8 } });
-    this.phaseText.position.set(0, 68);
-
-    const hint = new Text({
-      text: '手动：招募/合成/发射\n自动：招募→合成→瞄最高血',
-      style: { ...style, fontSize: 14, fill: 0x6a8ab0, wordWrap: true, wordWrapWidth: 200 },
+    this.mergeAttackBonusText = new Text({
+      text: '合成攻击 +0%',
+      style: { ...style, fontSize: 16, fill: 0xffcc66 },
     });
-    hint.position.set(0, 100);
+    this.mergeAttackBonusText.position.set(0, 60);
+    this.phaseText = new Text({ text: '', style: { ...style, fontSize: 16, fill: 0x8ab4e8 } });
+    this.phaseText.position.set(0, 86);
 
-    parent.addChild(this.wallText, this.turnText, this.phaseText, hint);
+    const hudTextW = layout.reserved.width - 24;
+    this.runBallEffectsText = new Text({
+      text: '',
+      style: {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize: 14,
+        fill: 0xb8d8f8,
+        wordWrap: true,
+        wordWrapWidth: hudTextW,
+        lineHeight: 20,
+      },
+    });
+    this.runBallEffectsText.position.set(0, 112);
+
+    this.hudHintText = new Text({
+      text: '手动：招募/合成/发射\n自动：招募→合成→瞄最高血',
+      style: {
+        ...style,
+        fontSize: 14,
+        fill: 0x6a8ab0,
+        wordWrap: true,
+        wordWrapWidth: hudTextW,
+      },
+    });
+    this.hudHintText.position.set(0, 200);
+
+    parent.addChild(
+      this.wallText,
+      this.turnText,
+      this.mergeAttackBonusText,
+      this.phaseText,
+      this.runBallEffectsText,
+      this.hudHintText,
+    );
+  }
+
+  private layoutHudHintBelowBallEffects() {
+    const bottom =
+      this.runBallEffectsText.position.y + this.runBallEffectsText.height + 10;
+    this.hudHintText.position.set(0, Math.max(200, bottom));
   }
 
   tick(dt: number) {
@@ -340,7 +413,25 @@ export class GameManager {
     this.control.update(scaled);
     this.battle.update(scaled);
     this.screenShake.update(scaled);
+    this.tickMergeBonusPop(scaled);
     this.tickAutoPlay(scaled);
+  }
+
+  private tickMergeBonusPop(dt: number) {
+    if (this.mergeBonusPopT < 0) return;
+    this.mergeBonusPopT -= dt;
+    const duration = 0.42;
+    const t = Math.max(0, this.mergeBonusPopT / duration);
+    const scale = 1 + 0.42 * Math.sin((1 - t) * Math.PI);
+    this.mergeAttackBonusText.scale.set(scale);
+    if (this.mergeBonusPopT <= 0) {
+      this.mergeBonusPopT = -1;
+      this.mergeAttackBonusText.scale.set(1);
+    }
+  }
+
+  private triggerMergeBonusPop() {
+    this.mergeBonusPopT = 0.42;
   }
 
   private updateHunterHud() {
@@ -439,22 +530,32 @@ export class GameManager {
     const skill = state.ultimate.skill;
     if (skill === 'phase' && state.phaseBuffPending) return;
 
-    const sum = sumAttackFromSlots(state.controlSlots);
+    const sum = sumAttackFromSlots(
+      state.controlSlots,
+      state.mergeAttackBonusPercent,
+    );
     if (!this.logic.tryActivateUltimate()) return;
 
     if (skill === 'judgment') {
       this.control.setInteractable(false);
-      this.battle.startJudgmentImmediate(sum, () => {
+      this.battle.startJudgmentImmediate(
+        sum,
+        this.logic.getJudgmentWaveCount(),
+        () => {
         this.syncBattleTargets();
         this.control.setInteractable(true);
         this.syncPresentation();
-      });
+        },
+      );
       this.syncUltimatePanel();
       return;
     }
 
     if (skill === 'frost') {
-      this.battle.applyFrostUltimateStrike(sum);
+      this.battle.applyFrostUltimateStrike(
+        sum,
+        this.logic.getFrostDamageTakenMult(),
+      );
       this.syncBattleTargets();
       this.syncPresentation();
       return;
@@ -472,7 +573,13 @@ export class GameManager {
   private syncPresentation() {
     const state = this.logic.getState();
     this.refreshDraftOverlay();
-    if (state.phase === 'draft' || state.phase === 'monster_group_draft') return;
+    if (
+      state.phase === 'draft' ||
+      state.phase === 'monster_group_draft' ||
+      state.phase === 'rogue_upgrade_pick'
+    ) {
+      return;
+    }
     this.syncControlView();
     this.updateHud();
   }
@@ -499,7 +606,11 @@ export class GameManager {
 
   private handleMerge(from: number, to: number) {
     if (this.logic.getState().phase !== 'prepare' || !this.logic.getRunPool().length) return;
+    const before = this.logic.getMergeAttackBonusPercent();
     if (!this.logic.tryMerge(from, to)) return;
+    if (this.logic.getMergeAttackBonusPercent() > before) {
+      this.triggerMergeBonusPop();
+    }
     this.syncControlView();
     this.control.showMergeAt(to);
     this.updateHud();
@@ -523,7 +634,9 @@ export class GameManager {
       judgment: false,
       attackSum: 0,
       phaseBuff: state.phaseBuffPending,
+      phaseCritBonus: this.logic.getPhaseCritBonus(),
       frostDebuff: false,
+      frostDamageMult: 1,
     });
     this.logic.consumePhaseBuff();
 
@@ -535,8 +648,11 @@ export class GameManager {
     this.updateHud();
 
     this.updateHunterHud();
-    this.battle.launchBallsSequential(payload.units, payload.aimAngleRad, () =>
-      this.onCombatFinished(),
+    this.battle.launchBallsSequential(
+      payload.units,
+      payload.aimAngleRad,
+      state.mergeAttackBonusPercent,
+      () => this.onCombatFinished(),
     );
   }
 
@@ -575,16 +691,23 @@ export class GameManager {
     const state = this.logic.getState();
     this.wallText.text = `城墙 ${state.wallHp} / ${state.wallMaxHp}`;
     this.turnText.text = `回合 ${state.turn}`;
+    this.mergeAttackBonusText.text = `合成攻击 +${state.mergeAttackBonusPercent}%`;
     const autoTag =
       this.autoPlayEnabled && state.phase === 'prepare' ? ' · 自动' : '';
     const spawnTag =
       state.phase === 'spawn' && shouldTriggerAirDrop(state.turn, this.battle.isBossSpawned())
         ? ' · 空降'
         : '';
-    const poolTag =
-      state.runBallColors?.length
-        ? ` · ${state.runBallColors.map((c) => c).join('/')}`
-        : '';
+    const colors = state.runBallColors;
+    if (colors?.length) {
+      this.runBallEffectsText.text = formatRunBallEffectsLines(colors);
+      this.runBallEffectsText.visible = true;
+    } else {
+      this.runBallEffectsText.text = '';
+      this.runBallEffectsText.visible = false;
+    }
+    this.layoutHudHintBelowBallEffects();
+
     this.phaseText.text =
       state.phase === 'victory'
         ? '阶段：通关！'
@@ -595,7 +718,7 @@ export class GameManager {
             : state.phase === 'rogue_skill_pick'
             ? '阶段：肉鸽选技能'
             : state.phase === 'prepare'
-            ? `阶段：备战${autoTag}${poolTag}`
+            ? `阶段：备战${autoTag}`
             : state.phase === 'spawn'
               ? `阶段：刷怪推进中…${spawnTag}`
               : '阶段：战斗中…';

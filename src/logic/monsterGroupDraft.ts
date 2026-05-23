@@ -13,6 +13,7 @@ import type { MonsterTypeId } from '../config/monsterTable';
 export interface MonsterGroupDraftOption {
   difficulty: MonsterGroupDifficultyId;
   name: string;
+  startingGold: number;
   shortDesc: string;
   /** 本局若选此方案，启用的特殊怪种类 */
   specialKinds: SpecialMonsterKind[];
@@ -30,6 +31,7 @@ function buildOption(
   return {
     difficulty,
     name: def.name,
+    startingGold: def.startingGold,
     shortDesc: def.shortDesc,
     specialKinds,
     specialTypeIds,

@@ -1,13 +1,54 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
-import { SPECIAL_MONSTER_TABLE } from '../config/specialMonsters';
+import {
+  SPECIAL_MONSTER_TABLE,
+  type SpecialMonsterKind,
+} from '../config/specialMonsters';
 import type { MonsterGroupDraftOption } from '../logic/monsterGroupDraft';
+import type { MonsterGroupDifficultyId } from '../config/monsterGroup';
 import { GAME_WIDTH } from '../layout';
 
 const CARD_W = 960;
-const CARD_H_BASE = 128;
-const CARD_H_HELL = 248;
 const CARD_GAP = 14;
-const SWATCH = 40;
+const SWATCH = 36;
+const PAD_X = 28;
+
+function strokeColor(difficulty: MonsterGroupDifficultyId, hover: boolean): number {
+  if (difficulty === 'hell') return hover ? 0xff8888 : 0xcc4444;
+  return hover ? 0x8ab4ff : 0x4a6a9a;
+}
+
+function titleColor(difficulty: MonsterGroupDifficultyId): number {
+  return difficulty === 'hell' ? 0xff8a8a : 0xffd56a;
+}
+
+function drawSpecialSwatch(
+  parent: Container,
+  x: number,
+  y: number,
+  kind: SpecialMonsterKind,
+): number {
+  const def = SPECIAL_MONSTER_TABLE[kind];
+  const sw = new Graphics();
+  const inset = 5;
+  sw.roundRect(0, 0, SWATCH, SWATCH, 6);
+  sw.fill({ color: def.shellColor, alpha: 0.95 });
+  sw.stroke({ width: 2, color: def.shellStroke });
+  sw.roundRect(inset, inset, SWATCH - inset * 2, SWATCH - inset * 2, 4);
+  sw.fill({ color: def.innerColor, alpha: 0.95 });
+  sw.position.set(x, y);
+  parent.addChild(sw);
+  return SWATCH + 10;
+}
+
+function measureCardHeight(opt: MonsterGroupDraftOption): number {
+  const descLines = opt.specialKinds.length > 0 ? 1 : 0;
+  const effectLines = opt.specialKinds.length;
+  const easyExtra = opt.specialKinds.length === 0 ? 28 : 0;
+  const top = 20 + 38 + 26;
+  const mid = descLines > 0 ? Math.max(22, SWATCH) + 14 : 0;
+  const effects = effectLines * 22 + (effectLines > 0 ? 8 : 0);
+  return top + mid + effects + easyExtra + 24;
+}
 
 export class MonsterGroupPickScreen extends Container {
   constructor(
@@ -17,9 +58,7 @@ export class MonsterGroupPickScreen extends Container {
     super();
     this.eventMode = 'static';
 
-    const cardHeights = options.map((o) =>
-      o.difficulty === 'hell' ? CARD_H_HELL : CARD_H_BASE,
-    );
+    const cardHeights = options.map((o) => measureCardHeight(o));
     const totalH =
       cardHeights.reduce((a, h) => a + h, 0) + CARD_GAP * (options.length - 1);
     const startX = (GAME_WIDTH - CARD_W) / 2;
@@ -57,32 +96,34 @@ export class MonsterGroupPickScreen extends Container {
         bg.clear();
         bg.roundRect(0, 0, CARD_W, cardH, 14);
         bg.fill({ color: hover ? 0x2a4478 : 0x1a2d52, alpha: 0.96 });
-        bg.stroke({
-          width: 2,
-          color:
-            opt.difficulty === 'hell'
-              ? hover
-                ? 0xff8888
-                : 0xcc4444
-              : hover
-                ? 0x8ab4ff
-                : 0x4a6a9a,
-        });
+        bg.stroke({ width: 2, color: strokeColor(opt.difficulty, hover) });
       };
       redraw(false);
       card.addChild(bg);
 
       const name = new Text({
-        text: `${opt.name}`,
+        text: opt.name,
         style: {
           fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
           fontSize: 30,
-          fill: opt.difficulty === 'hell' ? 0xff8a8a : 0xffd56a,
+          fill: titleColor(opt.difficulty),
           fontWeight: 'bold',
         },
       });
-      name.position.set(28, 20);
+      name.position.set(PAD_X, 20);
       card.addChild(name);
+
+      const goldLine = new Text({
+        text: `开局金币：${opt.startingGold}`,
+        style: {
+          fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+          fontSize: 18,
+          fill: 0xffd56a,
+          fontWeight: 'bold',
+        },
+      });
+      goldLine.position.set(PAD_X, 58);
+      card.addChild(goldLine);
 
       const desc = new Text({
         text: opt.shortDesc,
@@ -90,85 +131,50 @@ export class MonsterGroupPickScreen extends Container {
           fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
           fontSize: 18,
           fill: 0xc8daf0,
-          wordWrap: true,
-          wordWrapWidth: CARD_W - 56,
         },
       });
-      desc.position.set(28, 58);
+      desc.position.set(PAD_X, 84);
       card.addChild(desc);
 
-      if (opt.difficulty === 'hell' && opt.specialKinds.length > 0) {
-        let ty = 92;
-        const header = new Text({
-          text: '本局四种特殊怪：',
-          style: {
-            fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-            fontSize: 16,
-            fill: 0xffb4b4,
-            fontWeight: 'bold',
-          },
-        });
-        header.position.set(28, ty);
-        card.addChild(header);
-        ty += 26;
+      let contentBottom = 84 + desc.height;
 
+      if (opt.specialKinds.length > 0) {
+        let sx = PAD_X + desc.width + 16;
+        const sy = 84 + Math.max(0, (desc.height - SWATCH) / 2);
+        for (const kind of opt.specialKinds) {
+          sx += drawSpecialSwatch(card, sx, sy, kind);
+        }
+        contentBottom = Math.max(contentBottom, 84 + SWATCH);
+
+        let ty = contentBottom + 14;
         for (const kind of opt.specialKinds) {
           const def = SPECIAL_MONSTER_TABLE[kind];
           const line = new Text({
-            text: `· ${def.name}：${def.effectBrief}`,
+            text: `${def.name}：${def.effectBrief}`,
             style: {
               fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
               fontSize: 14,
               fill: 0xd8e8ff,
               wordWrap: true,
-              wordWrapWidth: CARD_W - 56,
+              wordWrapWidth: CARD_W - PAD_X * 2,
             },
           });
-          line.position.set(32, ty);
+          line.position.set(PAD_X, ty);
           card.addChild(line);
           ty += line.height + 6;
         }
+        contentBottom = ty;
       } else {
-        let sx = 28;
-        const sy = opt.specialKinds.length > 0 ? 96 : 88;
-        if (opt.specialKinds.length === 0) {
-          const none = new Text({
-            text: '仅普通灰砖',
-            style: {
-              fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-              fontSize: 16,
-              fill: 0x8ab4e8,
-            },
-          });
-          none.position.set(sx, sy + 4);
-          card.addChild(none);
-        } else {
-          for (const kind of opt.specialKinds) {
-            const def = SPECIAL_MONSTER_TABLE[kind];
-            const sw = new Graphics();
-            const inset = 6;
-            sw.roundRect(0, 0, SWATCH, SWATCH, 6);
-            sw.fill({ color: def.shellColor, alpha: 0.95 });
-            sw.stroke({ width: 2, color: def.shellStroke });
-            sw.roundRect(inset, inset, SWATCH - inset * 2, SWATCH - inset * 2, 4);
-            sw.fill({ color: def.innerColor, alpha: 0.95 });
-            sw.position.set(sx, sy);
-            card.addChild(sw);
-
-            const lbl = new Text({
-              text: def.name,
-              style: {
-                fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
-                fontSize: 14,
-                fill: 0xd0daf0,
-              },
-            });
-            lbl.position.set(sx, sy + SWATCH + 4);
-            card.addChild(lbl);
-
-            sx += SWATCH + 56;
-          }
-        }
+        const none = new Text({
+          text: '仅普通灰砖',
+          style: {
+            fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+            fontSize: 16,
+            fill: 0x8ab4e8,
+          },
+        });
+        none.position.set(PAD_X, contentBottom + 10);
+        card.addChild(none);
       }
 
       card.on('pointerover', () => redraw(true));

@@ -4,6 +4,7 @@ import type { BallColor, BallItem } from '../ballTypes';
 
 import { canMerge, createSingle, mergeResult } from '../ballTypes';
 
+import { getMergeAttackBonusIncrement } from '../config/mergeAttackBonus';
 import { getRecruitCost } from '../config/recruitCost';
 
 
@@ -149,7 +150,11 @@ export function applyMerge(
 
   pool: readonly BallColor[],
 
-): { slots: (BallItem | null)[]; merged: BallItem } | null {
+): {
+  slots: (BallItem | null)[];
+  merged: BallItem;
+  attackBonusPercentAdd: number;
+} | null {
 
   if (from === to) return null;
 
@@ -159,13 +164,15 @@ export function applyMerge(
 
   if (!a || !b || !canMerge(a, b)) return null;
 
+  const attackBonusPercentAdd = getMergeAttackBonusIncrement(a.tier);
+
   const next = [...slots];
 
   next[from] = null;
 
   next[to] = mergeResult(a, pool);
 
-  return { slots: next, merged: next[to]! };
+  return { slots: next, merged: next[to]!, attackBonusPercentAdd };
 
 }
 

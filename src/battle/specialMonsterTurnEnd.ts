@@ -1,7 +1,7 @@
-import { BLOCK_COLS } from '../config/gameBalance';
 import { getMonsterGrowthStep } from '../config/monsterScaling';
 import {
   getSpecialMonsterDef,
+  HEAL_MAX_TARGETS_PER_CAST,
   SPECIAL_MONSTER_TABLE,
   type SpecialMonsterKind,
 } from '../config/specialMonsters';
@@ -246,16 +246,22 @@ function processHeal(
   const amount = Math.max(1, Math.round(healer.maxHp * 0.3));
   const from = monsterCenter(healer);
   const targets: HealTargetFx[] = [];
+  const living = collectUniqueMonsters(grid).filter((m) => m.hp > 0);
+  if (living.length === 0) return null;
 
-  for (let c = 0; c < BLOCK_COLS; c++) {
-    const cell = grid[TOP_GRID_ROW]![c];
-    if (!cell || cell.hp <= 0 || cell.hp >= cell.maxHp) continue;
-    const heal = Math.min(amount, cell.maxHp - cell.hp);
-    cell.hp += heal;
-    const { x, y } = monsterCenter(cell);
+  const frontRow = Math.min(...living.map((m) => m.anchorRow));
+  const candidates = living
+    .filter((m) => m.anchorRow === frontRow && m.hp < m.maxHp)
+    .sort((a, b) => a.anchorCol - b.anchorCol || a.anchorRow - b.anchorRow);
+
+  for (const m of candidates) {
+    if (targets.length >= HEAL_MAX_TARGETS_PER_CAST) break;
+    const heal = Math.min(amount, m.maxHp - m.hp);
+    m.hp += heal;
+    const { x, y } = monsterCenter(m);
     targets.push({
-      instanceId: cell.instanceId,
-      col: c,
+      instanceId: m.instanceId,
+      col: m.anchorCol,
       amount: heal,
       x,
       y,
@@ -370,7 +376,12 @@ export function planAndApplySpecialMonsterTurn(
     }
   }
 
-  runtime.tickInvincibleEndOfTurn();
+  const skipInvincibleTick = new Set(
+    result.actions
+      .filter((a): a is Extract<SpecialEnemyAction, { kind: 'spawn' }> => a.kind === 'spawn')
+      .map((a) => a.spawnedId),
+  );
+  runtime.tickInvincibleEndOfTurn(skipInvincibleTick);
   runtime.clearAllFrozen();
 
   return result;

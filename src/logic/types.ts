@@ -4,6 +4,7 @@ import type { LaunchBallUnit } from '../ballComposition';
 
 import type { MonsterTypeId } from '../config/monsterTable';
 
+import type { RogueUpgradeId } from '../config/rogueUpgrades';
 import type { UltimateChargeState } from './ultimateCharge';
 import type { MonsterGroupDraftOption } from './monsterGroupDraft';
 import type { RunMonsterGroupConfig } from './monsterGroupDraft';
@@ -17,7 +18,8 @@ export type GamePhase =
   | 'combat'
   | 'spawn'
   | 'victory'
-  | 'rogue_skill_pick';
+  | 'rogue_skill_pick'
+  | 'rogue_upgrade_pick';
 
 
 
@@ -56,6 +58,9 @@ export interface GameState {
   /** 本局已完成的招募次数（决定下次招募价格） */
   recruitCount: number;
 
+  /** 合成累计的全局攻击加成（%，按基础攻击叠乘） */
+  mergeAttackBonusPercent: number;
+
   controlSlots: (BallItem | null)[];
 
   battleMonsters: MonsterSnapshot[];
@@ -73,6 +78,9 @@ export interface GameState {
   runMonsterGroup: RunMonsterGroupConfig | null;
 
   roguePurchaseCount: number;
+
+  /** 已选肉鸽法术升级（第 2–4 次购买） */
+  rogueUpgradeIds: RogueUpgradeId[];
 
   ultimate: UltimateChargeState;
 
