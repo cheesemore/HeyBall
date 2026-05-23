@@ -68,6 +68,8 @@ export interface PushResult {
   wallHits: BlockMonster[];
   spawnRowOrdinal: number;
   bossSpawned: boolean;
+  /** 首领登场时击碎的怪物 */
+  bossCrushed: BlockMonster[];
 }
 
 /** 位于顶行（anchorRow=0）的怪物立刻自爆，按当前血量扣城墙 */
@@ -108,7 +110,7 @@ export function pushGridWithNewRows(
     if (targetRow < 0) continue;
     targetRows.push(targetRow);
   }
-  spawnIntoBottomRows(next, targetRows, state);
+  const spawnResult = spawnIntoBottomRows(next, targetRows, state);
 
   wallHits.push(...detonateTopRowMonsters(next));
 
@@ -117,6 +119,7 @@ export function pushGridWithNewRows(
     wallHits,
     spawnRowOrdinal: state.spawnRowOrdinal,
     bossSpawned: state.bossSpawned,
+    bossCrushed: spawnResult.bossCrushed,
   };
 }
 
@@ -137,7 +140,7 @@ export function pushGridBossPhase(
   }
 
   const growthStep = getMonsterGrowthStep(state.spawnRowOrdinal);
-  trySpawnBoss(next, state, growthStep);
+  const bossCrushed = trySpawnBoss(next, state, growthStep);
   tryCompleteBoss(next, state);
   completePartialLargeMonsters(next);
 
@@ -150,6 +153,7 @@ export function pushGridBossPhase(
     wallHits,
     spawnRowOrdinal: state.spawnRowOrdinal,
     bossSpawned: state.bossSpawned,
+    bossCrushed,
   };
 }
 

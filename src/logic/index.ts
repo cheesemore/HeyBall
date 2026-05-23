@@ -6,7 +6,7 @@ export * from './gameLogic';
 export * from './rewards';
 export * from './combatSession';
 export * from './skillResolver';
-export * from './arrowRainPlanner';
+export * from './hunterPierce';
 export * from './airdropWave';
 export * from './runDraft';
 export * from './shamanChain';

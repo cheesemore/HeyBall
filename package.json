@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build:asset-manifest": "node scripts/build-asset-manifest.mjs",
+    "build": "npm run build:asset-manifest && tsc && vite build",
     "preview": "vite preview"
   },
   "devDependencies": {

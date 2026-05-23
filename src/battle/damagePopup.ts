@@ -13,11 +13,26 @@ const FONT_NORMAL = 32;
 const FONT_CRIT = 48;
 const FONT_ASSASSIN = 72;
 const FONT_ASSASSIN_ELITE = 96;
+const FONT_POISON = 34;
+const FONT_POISON_HEAVY = 52;
+const FONT_CLAW = 40;
 const STROKE_COLOR = 0xffffff;
 const FILL_COLOR = 0xff3333;
 const FILL_ASSASSIN = 0xffd700;
+const FILL_POISON = 0xda70d6;
+const STROKE_POISON = 0x4a1060;
+const FILL_CLAW = 0x7cfc00;
+const STROKE_CLAW = 0x1a4a20;
 
-export type PopupStyle = 'normal' | 'crit' | 'assassin' | 'assassinElite' | 'heal';
+export type PopupStyle =
+  | 'normal'
+  | 'crit'
+  | 'assassin'
+  | 'assassinElite'
+  | 'heal'
+  | 'poison'
+  | 'poisonHeavy'
+  | 'claw';
 
 interface PopupEntry {
   text: Text;
@@ -29,7 +44,15 @@ interface PopupEntry {
 
 function popupScale(age: number, style: PopupStyle): number {
   const peak =
-    style === 'assassinElite' ? 1.65 : style === 'assassin' ? 1.5 : PEAK_SCALE;
+    style === 'assassinElite'
+      ? 1.65
+      : style === 'assassin'
+        ? 1.5
+        : style === 'poisonHeavy'
+          ? 1.35
+          : style === 'claw'
+            ? 1.32
+            : PEAK_SCALE;
   if (age < POP_PEAK_TIME) {
     const u = age / POP_PEAK_TIME;
     const eased = 1 - (1 - u) ** 3;
@@ -65,6 +88,27 @@ function makeDamageText(damage: number, style: PopupStyle): Text {
     fontSize = 28;
     fill = 0x66ff88;
   }
+  if (style === 'poison') {
+    fontSize = FONT_POISON;
+    fill = FILL_POISON;
+  }
+  if (style === 'poisonHeavy') {
+    fontSize = FONT_POISON_HEAVY;
+    fill = FILL_POISON;
+  }
+  if (style === 'claw') {
+    fontSize = FONT_CLAW;
+    fill = FILL_CLAW;
+  }
+
+  const strokeColor =
+    style === 'poison' || style === 'poisonHeavy'
+      ? STROKE_POISON
+      : style === 'claw'
+        ? STROKE_CLAW
+        : STROKE_COLOR;
+  const strokeWidth =
+    style === 'assassinElite' || style === 'poisonHeavy' || style === 'claw' ? 2 : 1;
 
   return new Text({
     text: style === 'heal' ? `+${damage}` : String(damage),
@@ -74,8 +118,8 @@ function makeDamageText(damage: number, style: PopupStyle): Text {
       fill,
       fontWeight: 'bold',
       stroke: {
-        color: STROKE_COLOR,
-        width: style === 'assassinElite' ? 2 : 1,
+        color: strokeColor,
+        width: strokeWidth,
         join: 'round',
       },
     },

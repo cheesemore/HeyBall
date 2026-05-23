@@ -18,7 +18,7 @@ export const BALL_SKILL_DESC: Record<BallColor, string> = {
   blue: '碰撞15%触发范围魔爆',
   yellow: '暴击率+35%首暴增伤',
   pink: '碰撞15%十字斩贯通',
-  green: '碰撞叠层弹射后落箭雨',
+  green: '叠层后原点并排贯通箭',
   navy: '攻击15%概率触发闪电链',
   purple: '攻击叠毒回合末毒发',
   orange: '攻击概率爪击最近砖',

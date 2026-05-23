@@ -1,6 +1,8 @@
 import { Application, Container, Graphics } from 'pixi.js';
+import { bindAudioUnlock } from './audio/audioEngine';
 import { TARGET_FPS } from './config/gameBalance';
 import { GameManager } from './game/gameManager';
+import { AssetLoadingScreen } from './game/screens/AssetLoadingScreen';
 import {
   GAME_WIDTH,
   GAME_HEIGHT,
@@ -16,7 +18,9 @@ const MERGE_FILL = 0x122a52;
 const RESERVED_FILL = 0x0f2244;
 const CENTER_DOT = 0xff2222;
 
-async function main() {
+async function bootstrap(): Promise<void> {
+  bindAudioUnlock();
+
   const app = new Application();
   await app.init({
     width: GAME_WIDTH,
@@ -35,13 +39,31 @@ async function main() {
 
   const mount = document.getElementById('app');
   if (!mount) throw new Error('#app not found');
-  mount.appendChild(app.canvas);
+  mount.replaceChildren(app.canvas);
 
   fitCanvas(app.canvas);
   window.addEventListener('resize', () => fitCanvas(app.canvas));
 
   const root = new Container();
   app.stage.addChild(root);
+
+  const loading = new AssetLoadingScreen();
+  root.addChild(loading);
+
+  const loadOutcome = await loading.run();
+  loading.destroy({ children: true });
+
+  if (!loadOutcome.ok) {
+    console.error(loadOutcome.error);
+    mount.textContent = '资源加载失败，请检查网络后刷新页面。';
+    return;
+  }
+  if (loadOutcome.result.failed > 0) {
+    console.warn(
+      '[preload] failed assets',
+      loadOutcome.result.failedPaths.slice(0, 20),
+    );
+  }
 
   drawZones(root);
   drawLines(root);
@@ -118,4 +140,8 @@ function drawCenterDot(parent: Container) {
   parent.addChild(dot);
 }
 
-main().catch(console.error);
+bootstrap().catch((err) => {
+  console.error(err);
+  const mount = document.getElementById('app');
+  if (mount) mount.textContent = '游戏启动失败，请查看控制台。';
+});

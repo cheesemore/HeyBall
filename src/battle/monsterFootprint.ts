@@ -60,6 +60,54 @@ export function placeFootprintPartial(
   return placed;
 }
 
+export function footprintsOverlap(
+  aRow: number,
+  aCol: number,
+  aW: number,
+  aH: number,
+  bRow: number,
+  bCol: number,
+  bW: number,
+  bH: number,
+): boolean {
+  return !(
+    aRow + aH <= bRow ||
+    bRow + bH <= aRow ||
+    aCol + aW <= bCol ||
+    bCol + bW <= aCol
+  );
+}
+
+/** 击碎与矩形足迹相交的全部怪物（含仅部分重叠的大怪） */
+export function crushMonstersOverlappingFootprint(
+  grid: MonsterGrid,
+  anchorRow: number,
+  anchorCol: number,
+  w: number,
+  h: number,
+): BlockMonster[] {
+  const crushed: BlockMonster[] = [];
+  for (const m of collectUniqueMonsters(grid)) {
+    if (
+      !footprintsOverlap(
+        m.anchorRow,
+        m.anchorCol,
+        m.footprintW,
+        m.footprintH,
+        anchorRow,
+        anchorCol,
+        w,
+        h,
+      )
+    ) {
+      continue;
+    }
+    clearMonsterFromGrid(grid, m);
+    crushed.push(m);
+  }
+  return crushed;
+}
+
 export function clearMonsterFromGrid(grid: MonsterGrid, monster: BlockMonster): void {
   for (let r = 0; r < BLOCK_ROWS; r++) {
     for (let c = 0; c < BLOCK_COLS; c++) {

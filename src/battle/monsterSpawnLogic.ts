@@ -5,6 +5,8 @@ import {
 import {
   BOSS_ANCHOR_COL,
   BOSS_ANCHOR_ROW,
+  BOSS_FOOTPRINT_H,
+  BOSS_FOOTPRINT_W,
   BOSS_SPAWN_ORDINAL,
   ELITE_FOOTPRINT_H,
   ELITE_FOOTPRINT_W,
@@ -17,8 +19,10 @@ import { createMonsterInstance } from './monster';
 import {
   canPlaceFootprint,
   completePartialLargeMonsters,
+  crushMonstersOverlappingFootprint,
   placeFootprintPartial,
 } from './monsterFootprint';
+import type { BlockMonster } from './monster';
 import type { MonsterGrid } from './monsterGrid';
 
 export interface SpawnSessionState {
@@ -28,23 +32,30 @@ export interface SpawnSessionState {
   specialTypeIds: MonsterTypeId[];
 }
 
-/** 首领：固定 4×4 贴底居中，达刷行序号后尝试生成（可跨回合拼齐） */
+/** 首领：固定 4×4 贴底居中；生成前击碎占位区内全部怪物 */
 export function trySpawnBoss(
   grid: MonsterGrid,
   state: SpawnSessionState,
   growthStep: number,
-): boolean {
+): BlockMonster[] {
   if (state.bossSpawned || state.spawnRowOrdinal < BOSS_SPAWN_ORDINAL) {
-    return false;
+    return [];
   }
+
+  const crushed = crushMonstersOverlappingFootprint(
+    grid,
+    BOSS_ANCHOR_ROW,
+    BOSS_ANCHOR_COL,
+    BOSS_FOOTPRINT_W,
+    BOSS_FOOTPRINT_H,
+  );
 
   const boss = createMonsterInstance('boss', BOSS_ANCHOR_ROW, BOSS_ANCHOR_COL, growthStep);
   const placed = placeFootprintPartial(grid, boss);
   if (placed > 0) {
     state.bossSpawned = true;
-    return true;
   }
-  return false;
+  return crushed;
 }
 
 /** 继续铺满场上首领的剩余格子 */
@@ -114,20 +125,26 @@ export function fillNormalCellsOnRow(
   }
 }
 
+export interface SpawnBottomRowsResult {
+  spawnRowOrdinal: number;
+  bossCrushed: BlockMonster[];
+}
+
 /** 对一批底行刷怪：首领 > 补全 > 精英 > 普通（首领已出则不再刷怪） */
 export function spawnIntoBottomRows(
   grid: MonsterGrid,
   targetRows: number[],
   state: SpawnSessionState,
-): number {
+): SpawnBottomRowsResult {
   let ordinal = state.spawnRowOrdinal;
   const bossPhase = state.bossSpawned;
+  const bossCrushed: BlockMonster[] = [];
 
   for (const targetRow of targetRows) {
     const growthStep = getMonsterGrowthStep(ordinal);
 
     if (!bossPhase) {
-      trySpawnBoss(grid, state, growthStep);
+      bossCrushed.push(...trySpawnBoss(grid, state, growthStep));
       tryCompleteBoss(grid, state);
       completePartialLargeMonsters(grid);
 
@@ -147,7 +164,7 @@ export function spawnIntoBottomRows(
   }
 
   state.spawnRowOrdinal = ordinal;
-  return ordinal;
+  return { spawnRowOrdinal: ordinal, bossCrushed };
 }
 
 function shuffle<T>(arr: T[]): void {

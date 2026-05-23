@@ -65,7 +65,7 @@ export class GameManager {
     this.control = new ControlArea({
       onRecruit: () => this.handleRecruit(),
       onRogue: () => this.handleRogue(),
-      onLaunch: () => this.handleLaunch(),
+      onLaunch: () => this.handleLaunch(this.battle.getLaunchAimAngle()),
       onMerge: (from, to) => this.handleMerge(from, to),
     });
 
@@ -80,7 +80,7 @@ export class GameManager {
     this.rightPanel.addChild(this.autoPlayBtn);
 
     this.hunterCountText = new Text({
-      text: '猎人箭雨：0 支',
+      text: '猎人齐射：0 轮',
       style: {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
         fontSize: 15,
@@ -453,7 +453,7 @@ export class GameManager {
 
   private updateHunterHud() {
     const n = this.battle.getHunterRainLayers();
-    this.hunterCountText.text = `猎人箭雨：${n} 支`;
+    this.hunterCountText.text = `猎人齐射：${n} 轮`;
   }
 
   private tickAutoPlay(dt: number) {

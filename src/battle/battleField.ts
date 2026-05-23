@@ -26,6 +26,8 @@ import {
   BLOCK_ROWS,
   BALL_LAUNCH_INTERVAL,
   BLOCK_HIT_FLASH_DURATION,
+  POISON_FLASH_DURATION,
+  CLAW_FLASH_DURATION,
   INITIAL_SPAWN_ROWS,
   ROW_SPAWN_ANIM_STEP_SEC,
 } from '../config/gameBalance';
@@ -38,7 +40,16 @@ import {
   BATTLE_WIDTH,
   BATTLE_HEIGHT,
 } from '../layout';
-import { planArrowRain, type ArrowRainStrikePlan } from '../logic/arrowRainPlanner';
+import {
+  collectMonstersOnPenetratingLine,
+  planHunterVolley,
+  pickRandomPointInBattle,
+  type HunterVolleyPlan,
+} from '../logic/hunterPierce';
+import {
+  HUNTER_PIERCE_LINE_HALF_WIDTH,
+  HUNTER_VOLLEY_INTERVAL_SEC,
+} from '../config/ballSkills';
 import { pickLightningChainTargets } from '../logic/shamanChain';
 import { getMonsterGrowthStep } from '../config/monsterScaling';
 import { getMonsterTip } from '../config/monsterTips';
@@ -48,10 +59,33 @@ import {
   AIRDROP_FALL_START_OFFSET,
   AIRDROP_STAGGER_SEC,
 } from '../config/airdrop';
-import { ARROW_STAGGER_SEC } from './skillVfx';
 import { resolveCircleAABB } from './ballCollision';
 import { BallEntity } from './ballEntity';
 import { LaunchCone } from './launchCone';
+import { sfxBlockHit, sfxWallBounce } from '../audio/collisionSfx';
+import { sfxAirdropLand, sfxSpawnRowPush } from '../audio/worldSfx';
+import {
+  sfxAnnihilate,
+  sfxArrowRainHit,
+  sfxAssassinAmbush,
+  sfxBossCrush,
+  sfxDruidClaw,
+  sfxHunterStack,
+  sfxJudgmentStart,
+  sfxJudgmentWave,
+  sfxKnightCross,
+  sfxMageArcane,
+  sfxShamanChain,
+  sfxSpecialDetonate,
+  sfxSpecialHeal,
+  sfxSpecialJump,
+  sfxSpecialSpawn,
+  sfxUltimateFrost,
+  sfxUltimatePhase,
+  sfxWarlockPoisonApply,
+  sfxWarlockPoisonTick,
+  sfxWarriorSplit,
+} from '../audio/skillSfx';
 import { isAnchorCell, type BlockMonster } from './monster';
 import { getSpecialMonsterDef, isSpecialMonsterType } from '../config/specialMonsters';
 import { SpecialMonsterRuntime } from './specialMonsterRuntime';
@@ -98,7 +132,10 @@ import {
   PHASE_SPEED_MULT,
 } from '../config/ultimateSkills';
 import { CombatSessionState } from '../logic/combatSession';
-import { DRUID_CLAW_DAMAGE_RATIO } from '../config/ballSkills';
+import {
+  DRUID_CLAW_DAMAGE_RATIO,
+  WARLOCK_POISON_HEAVY_STACKS,
+} from '../config/ballSkills';
 import {
   getMageArcaneRadius,
   knightCrossDamage,
@@ -134,6 +171,9 @@ interface BlockView {
   poisonBadgeBg: Graphics | null;
   poisonBadgeText: Text | null;
   flashTime: number;
+  flashDuration: number;
+  flashPoison: boolean;
+  flashClaw: boolean;
   shake: MonsterShakeState;
   anchorRow: number;
   anchorCol: number;
@@ -211,11 +251,11 @@ export class BattleField extends Container {
   private readonly monsterFallOffsetY = new Map<string, number>();
   private onHunterCountChange: (() => void) | null = null;
   private triggerScreenShake: ((sec: number, mag: number) => void) | null = null;
-  private arrowRainPlayback: {
-    strikes: ArrowRainStrikePlan[];
-    nextIndex: number;
+  private hunterVolleyPlayback: {
+    volleysLeft: number;
     stagger: number;
   } | null = null;
+  private pendingHunterVolley: HunterVolleyPlan | null = null;
   private poisonTickPlayback: {
     instanceIds: string[];
     nextIndex: number;
@@ -328,6 +368,11 @@ export class BattleField extends Container {
     this.launchCone.showSweeping();
   }
 
+  /** 备战阶段瞄准扇形当前指向（按下发射时读取） */
+  getLaunchAimAngle(): number {
+    return this.launchCone.getAimAngle();
+  }
+
   hideLaunchCone() {
     this.launchCone.hide();
   }
@@ -335,7 +380,8 @@ export class BattleField extends Container {
   /** 胜负后重开：清空战斗动画与战场（不触发 onCombatEnd） */
   resetForNewRun(): void {
     this.abortCombat();
-    this.arrowRainPlayback = null;
+    this.hunterVolleyPlayback = null;
+    this.pendingHunterVolley = null;
     this.poisonTickPlayback = null;
     this.clearUltimateRoundState();
     this.combatSession.reset();
@@ -345,7 +391,8 @@ export class BattleField extends Container {
     this.specialTurnPlayback = null;
     this.judgmentPlayback = null;
     this.judgmentOnComplete = null;
-    this.arrowRainPlayback = null;
+    this.hunterVolleyPlayback = null;
+    this.pendingHunterVolley = null;
     this.poisonTickPlayback = null;
     this.jumpAnims.clear();
     this.birthAnims.clear();
@@ -420,11 +467,13 @@ export class BattleField extends Container {
       stagger: 0.05,
     };
     this.ultimateVfx.startMeteorShower();
+    sfxJudgmentStart();
   }
 
   /** 备战发动相位空间：立刻显示特效，战斗回合发射后生效 */
   startPreparePhaseBuff() {
     this.ultimateVfx.startPhaseSpace();
+    sfxUltimatePhase();
   }
 
   /** 备战发动冻狱：立刻全场伤害 + 暴雪与蓝罩，不计入充能 */
@@ -433,6 +482,7 @@ export class BattleField extends Container {
     this.pushUltimateChargeSuppress();
     this.frostDamageMult = damageTakenMult;
     this.ultimateVfx.startBlizzard();
+    sfxUltimateFrost();
     for (const m of collectUniqueMonsters(this.grid)) {
       if (m.hp <= 0) continue;
       const { x, y } = this.monsterCenter(m);
@@ -549,7 +599,7 @@ export class BattleField extends Container {
     this.ultimateVfx.update(dt);
     this.updateJudgmentWaves(dt);
     this.updatePoisonTicks(dt);
-    this.updateArrowRain(dt);
+    this.updateHunterVolley(dt);
     this.updateBlockFlashes(dt);
     this.updateBlockShakes(dt);
     this.updateChargeSweeps(dt);
@@ -583,7 +633,7 @@ export class BattleField extends Container {
     if (
       this.launchQueue.length === 0 &&
       !this.hasActiveSlotBalls() &&
-      !this.arrowRainPlayback &&
+      !this.hunterVolleyPlayback &&
       !this.poisonTickPlayback
     ) {
       this.beginEndCombatSequence();
@@ -619,12 +669,14 @@ export class BattleField extends Container {
         ball.vx = Math.abs(ball.vx);
         ball.x = nx;
         ball.y = ny;
+        sfxWallBounce(ball.vx, ball.vy);
         if (this.afterBounce(ball)) return;
       } else if (nx > bounds.right) {
         nx = bounds.right;
         ball.vx = -Math.abs(ball.vx);
         ball.x = nx;
         ball.y = ny;
+        sfxWallBounce(ball.vx, ball.vy);
         if (this.afterBounce(ball)) return;
       }
 
@@ -645,6 +697,7 @@ export class BattleField extends Container {
         ball.vy = Math.abs(ball.vy);
         ball.x = nx;
         ball.y = ny;
+        sfxWallBounce(ball.vx, ball.vy);
         if (this.afterBounce(ball)) return;
       }
 
@@ -676,6 +729,7 @@ export class BattleField extends Container {
         ball.vy = sep.vy;
         ball.x = nx;
         ball.y = ny;
+        if (sep.hit) sfxBlockHit(ball.vx, ball.vy);
         if (this.afterBounce(ball)) return;
       }
 
@@ -701,6 +755,7 @@ export class BattleField extends Container {
     this.onUltimateCollision?.();
     if (ball.color === 'green' && !ball.isTemporary) {
       if (this.combatSession.tryAddHunterRainLayer(ball.isBig)) {
+        sfxHunterStack();
         this.onHunterCountChange?.();
       }
     }
@@ -709,8 +764,11 @@ export class BattleField extends Container {
       return true;
     }
     if (ball.canSplit && ball.color === 'brown') {
-      if (ball.isBig) this.tryWarriorBigSplit(ball);
-      else this.tryWarriorSplit(ball);
+      if (ball.isBig) {
+        if (this.tryWarriorBigSplit(ball)) sfxWarriorSplit();
+      } else if (this.tryWarriorSplit(ball)) {
+        sfxWarriorSplit();
+      }
     }
     return false;
   }
@@ -730,6 +788,7 @@ export class BattleField extends Container {
       Math.random() < ANNIHILATE_DESTROY_BALL_CHANCE
     ) {
       this.fxLayer.spawnSkillText(popupX, popupY, '湮灭!', 0xce93d8);
+      sfxAnnihilate();
       this.purgeBall(ball);
       return;
     }
@@ -752,6 +811,7 @@ export class BattleField extends Container {
     if (hit.assassinAmbush) {
       popupStyle = hit.assassinEliteAmbush ? 'assassinElite' : 'assassin';
       this.skillVfx.spawnAssassinFlash(popupX, popupY, hit.assassinEliteAmbush);
+      sfxAssassinAmbush(hit.assassinEliteAmbush);
       this.triggerScreenShake?.(
         hit.assassinEliteAmbush ? 0.26 : 0.2,
         hit.assassinEliteAmbush ? 14 : 11,
@@ -768,6 +828,7 @@ export class BattleField extends Container {
         ball.isBig,
       );
       this.updatePoisonBadge(monster.instanceId, stacks);
+      sfxWarlockPoisonApply();
     }
     if (ball.color === 'blue' && rollMageArcaneProc()) {
       this.procMageArcane(ball, impactX, impactY);
@@ -822,6 +883,7 @@ export class BattleField extends Container {
     const base = this.combatSession.warlockPoisonTickBaseDamage(monster.instanceId);
     if (base <= 0) return;
 
+    const stacks = this.combatSession.getWarlockPoisonStacks(monster.instanceId);
     const hit = rollHitDamage(
       {
         color: 'purple',
@@ -835,14 +897,13 @@ export class BattleField extends Container {
       this.combatSession,
     );
 
+    const popupStyle: PopupStyle =
+      stacks >= WARLOCK_POISON_HEAVY_STACKS ? 'poisonHeavy' : 'poison';
+
     this.skillVfx.spawnPoisonBurst(popupX, popupY);
-    this.flashMonster(monster);
-    this.fxLayer.spawn(
-      popupX,
-      popupY,
-      hit.damage,
-      hit.isCrit ? 'crit' : 'normal',
-    );
+    sfxWarlockPoisonTick();
+    this.flashMonsterPoison(monster);
+    this.fxLayer.spawn(popupX, popupY, hit.damage, popupStyle);
     this.damageMonster(monster, hit.damage);
   }
 
@@ -869,6 +930,7 @@ export class BattleField extends Container {
       ...extras.map((m) => this.monsterCenter(m)),
     ];
     this.skillVfx.spawnLightningChain(chainPoints);
+    sfxShamanChain();
 
     const chainBase = shamanChainBaseDamage(mainHitDamage);
     for (const target of extras) {
@@ -892,12 +954,40 @@ export class BattleField extends Container {
     if (!target) return;
 
     const { x, y } = this.monsterCenter(target);
-    this.skillVfx.spawnDruidClaw(x, y);
+    this.skillVfx.spawnColorLine(ball.x, ball.y, x, y, 0x55ff77);
+    this.skillVfx.spawnDruidClaw(ball.x, ball.y, x, y);
+    sfxDruidClaw(ball.isBig);
+    this.triggerScreenShake?.(ball.isBig ? 0.17 : 0.12, ball.isBig ? 10 : 7);
     const base = Math.max(
       1,
       Math.round(this.combatSession.druidSmallAttack * DRUID_CLAW_DAMAGE_RATIO),
     );
-    this.dealBallDamage(ball, target, x, y, base);
+    this.dealDruidClawDamage(ball, target, x, y, base);
+  }
+
+  private dealDruidClawDamage(
+    ball: BallEntity,
+    monster: BlockMonster,
+    popupX: number,
+    popupY: number,
+    baseDamage: number,
+  ) {
+    const hit = rollHitDamage(
+      {
+        color: 'orange',
+        isBig: ball.isBig,
+        attack: baseDamage,
+        baseCritRate: this.combatSession.druidCritRate,
+        baseCritMult: this.combatSession.druidCritMult,
+        monsterInstanceId: monster.instanceId,
+        monsterTypeId: monster.typeId,
+      },
+      this.combatSession,
+    );
+    const popupStyle: PopupStyle = hit.isCrit ? 'crit' : 'claw';
+    this.flashMonsterClaw(monster);
+    this.fxLayer.spawn(popupX, popupY, hit.damage, popupStyle);
+    this.damageMonster(monster, hit.damage);
   }
 
   private damageMonster(
@@ -931,6 +1021,11 @@ export class BattleField extends Container {
     const dmg = mageArcaneDamage(ball.attack);
     const radius = getMageArcaneRadius(ball.isBig);
     this.skillVfx.spawnArcaneExplosion(impactX, impactY, radius);
+    sfxMageArcane(ball.isBig);
+    this.triggerScreenShake?.(
+      ball.isBig ? 0.32 : 0.22,
+      ball.isBig ? 18 : 12,
+    );
     for (const m of this.collectMonstersInRadius(impactX, impactY, radius)) {
       const { x, y } = this.monsterCenter(m);
       this.dealBallDamage(ball, m, x, y, dmg);
@@ -940,6 +1035,7 @@ export class BattleField extends Container {
   private procKnightCross(ball: BallEntity, row: number, col: number) {
     const dmg = knightCrossDamage(ball.attack, ball.isBig);
     this.skillVfx.spawnKnightCross(row, col, ball.isBig);
+    sfxKnightCross(ball.isBig);
     for (const m of this.collectMonstersOnCross(row, col)) {
       const { x, y } = this.monsterCenter(m);
       this.dealBallDamage(ball, m, x, y, dmg);
@@ -978,11 +1074,11 @@ export class BattleField extends Container {
     return list;
   }
 
-  private tryWarriorBigSplit(parent: BallEntity) {
-    if (!parent.canSplit || !parent.alive) return;
-    if (Math.random() >= WARRIOR_BIG_SPLIT_CHANCE) return;
+  private tryWarriorBigSplit(parent: BallEntity): boolean {
+    if (!parent.canSplit || !parent.alive) return false;
+    if (Math.random() >= WARRIOR_BIG_SPLIT_CHANCE) return false;
     const speed = Math.hypot(parent.vx, parent.vy);
-    if (speed < 1) return;
+    if (speed < 1) return false;
     const baseAngle = Math.atan2(parent.vy, parent.vx);
     const spreadRad = (WARRIOR_SPLIT_ANGLE_SPREAD_DEG * Math.PI) / 180;
     const childRadius = getBattleBallRadius(false);
@@ -1012,13 +1108,14 @@ export class BattleField extends Container {
       this.balls.push(child);
       this.ballLayer.addChild(child.view);
     }
+    return true;
   }
 
-  private tryWarriorSplit(parent: BallEntity) {
-    if (!parent.canSplit || !parent.alive) return;
-    if (Math.random() >= WARRIOR_SPLIT_CHANCE) return;
+  private tryWarriorSplit(parent: BallEntity): boolean {
+    if (!parent.canSplit || !parent.alive) return false;
+    if (Math.random() >= WARRIOR_SPLIT_CHANCE) return false;
     const speed = Math.hypot(parent.vx, parent.vy);
-    if (speed < 1) return;
+    if (speed < 1) return false;
     const baseAngle = Math.atan2(parent.vy, parent.vx);
     const spreadRad = (WARRIOR_SPLIT_ANGLE_SPREAD_DEG * Math.PI) / 180;
     const childRadius = Math.max(5, parent.radius * WARRIOR_SPLIT_SIZE_RATIO);
@@ -1049,6 +1146,7 @@ export class BattleField extends Container {
       this.balls.push(child);
       this.ballLayer.addChild(child.view);
     }
+    return true;
   }
 
   private beginEndCombatSequence() {
@@ -1056,7 +1154,7 @@ export class BattleField extends Container {
       this.beginPoisonTickSequence();
       return;
     }
-    this.beginHunterArrowRainOrFinish();
+    this.beginHunterVolleyOrFinish();
   }
 
   private shouldResolvePoisonTicks(): boolean {
@@ -1076,7 +1174,7 @@ export class BattleField extends Container {
       .map((m) => m.instanceId);
 
     if (instanceIds.length === 0) {
-      this.beginHunterArrowRainOrFinish();
+      this.beginHunterVolleyOrFinish();
       return;
     }
 
@@ -1090,7 +1188,7 @@ export class BattleField extends Container {
     const pb = this.poisonTickPlayback;
     if (!pb || pb.nextIndex >= pb.instanceIds.length) {
       this.poisonTickPlayback = null;
-      this.beginHunterArrowRainOrFinish();
+      this.beginHunterVolleyOrFinish();
       return;
     }
 
@@ -1108,8 +1206,10 @@ export class BattleField extends Container {
   private abortPoisonIfAllDead(): boolean {
     if (this.hasLivingMonsters()) return false;
     this.poisonTickPlayback = null;
-    this.arrowRainPlayback = null;
+    this.hunterVolleyPlayback = null;
+    this.pendingHunterVolley = null;
     this.skillVfx.cancelFlyingArrow();
+    this.skillVfx.cancelHunterVolley();
     this.finishCombat();
     return true;
   }
@@ -1125,120 +1225,128 @@ export class BattleField extends Container {
 
     if (pb.nextIndex >= pb.instanceIds.length) {
       this.poisonTickPlayback = null;
-      this.beginHunterArrowRainOrFinish();
+      this.beginHunterVolleyOrFinish();
       return;
     }
 
     this.launchNextPoisonTick();
   }
 
-  private beginHunterArrowRainOrFinish() {
-    const shots = this.combatSession.getArrowRainCount();
-    if (shots <= 0) {
+  private beginHunterVolleyOrFinish() {
+    const volleys = this.combatSession.consumeHunterVolleys();
+    if (volleys <= 0) {
       this.finishCombat();
       return;
     }
 
-    const monsters = collectUniqueMonsters(this.grid);
-    if (monsters.length === 0) {
-      this.finishCombat();
-      return;
-    }
-
-    const rainTargets = monsters.map((m) => {
-      const { left, top, right, bottom } = getFootprintAabb(m);
-      return {
-        instanceId: m.instanceId,
-        hp: m.hp,
-        centerX: (left + right) / 2,
-        centerY: (top + bottom) / 2,
-      };
-    });
-
-    const strikes = planArrowRain(
-      rainTargets,
-      shots,
-      this.combatSession.hunterArrowDamage,
-    );
-
-    if (strikes.length === 0) {
-      this.finishCombat();
-      return;
-    }
-
-    this.arrowRainPlayback = { strikes, nextIndex: 0, stagger: 0 };
-    this.launchNextArrowRainStrike();
+    this.hunterVolleyPlayback = { volleysLeft: volleys, stagger: 0 };
+    this.fireNextHunterVolley();
   }
 
   private hasLivingMonsters(): boolean {
     return collectUniqueMonsters(this.grid).some((m) => m.hp > 0);
   }
 
-  /** 场上已无存活敌人时立刻结束箭雨 */
-  private abortArrowRainIfAllDead(): boolean {
-    if (this.hasLivingMonsters()) return false;
-    this.skillVfx.cancelFlyingArrow();
-    this.arrowRainPlayback = null;
-    this.finishCombat();
-    return true;
-  }
+  private fireNextHunterVolley() {
+    const pb = this.hunterVolleyPlayback;
+    if (!pb || pb.volleysLeft <= 0) return;
 
-  private launchNextArrowRainStrike() {
-    if (this.abortArrowRainIfAllDead()) return;
+    pb.volleysLeft--;
 
-    const pb = this.arrowRainPlayback;
-    if (!pb || pb.nextIndex >= pb.strikes.length) return;
+    const monsters = collectUniqueMonsters(this.grid);
+    const target = pickRandomPointInBattle(
+      monsters,
+      BATTLE_WIDTH,
+      BATTLE_HEIGHT,
+    );
+    const extendLen = Math.hypot(BATTLE_WIDTH, BATTLE_HEIGHT) * 1.25;
+    const plan = planHunterVolley(
+      LAUNCH_X,
+      LAUNCH_Y,
+      target.x,
+      target.y,
+      extendLen,
+    );
+    this.pendingHunterVolley = plan;
 
-    const strike = pb.strikes[pb.nextIndex]!;
-    pb.nextIndex++;
+    for (const line of plan.lines) {
+      this.skillVfx.spawnColorLine(
+        plan.originX,
+        plan.originY,
+        line.endX,
+        line.endY,
+        0x5a9a00,
+      );
+    }
 
-    const fromY = battleGridRowTopY(0);
-    const spread = (Math.random() - 0.5) * 80;
-    this.skillVfx.spawnArrowFall(
-      strike.targetX + spread,
-      fromY,
-      strike.targetX,
-      strike.targetY,
+    this.skillVfx.spawnHunterVolley(
+      plan.originX,
+      plan.originY,
+      plan.lines.map((l) => ({ toX: l.targetX, toY: l.targetY })),
     );
   }
 
-  private updateArrowRain(dt: number) {
-    const pb = this.arrowRainPlayback;
-    if (!pb) return;
+  private applyPendingHunterVolley() {
+    const plan = this.pendingHunterVolley;
+    this.pendingHunterVolley = null;
+    if (!plan) return;
 
-    if (this.abortArrowRainIfAllDead()) return;
+    const damage = this.combatSession.getHunterPierceArrowDamage();
+    const extendLen = Math.hypot(BATTLE_WIDTH, BATTLE_HEIGHT) * 1.25;
 
-    if (this.skillVfx.isArrowFlying()) {
-      if (this.skillVfx.updateArrowFall(dt)) {
-        if (!this.abortArrowRainIfAllDead()) {
-          this.applyArrowRainStrike(pb.strikes[pb.nextIndex - 1]!);
-          if (this.abortArrowRainIfAllDead()) return;
-          pb.stagger = ARROW_STAGGER_SEC;
-        }
+    for (const line of plan.lines) {
+      const hits = collectMonstersOnPenetratingLine(
+        this.grid,
+        plan.originX,
+        plan.originY,
+        line.targetX,
+        line.targetY,
+        extendLen,
+        HUNTER_PIERCE_LINE_HALF_WIDTH,
+      );
+      for (const m of hits) {
+        if (m.hp <= 0) continue;
+        const { x, y } = this.monsterCenter(m);
+        this.dealHunterPierceDamage(m, x, y, damage);
+      }
+    }
+  }
+
+  private dealHunterPierceDamage(
+    monster: BlockMonster,
+    popupX: number,
+    popupY: number,
+    damage: number,
+  ) {
+    this.flashMonster(monster);
+    sfxArrowRainHit();
+    this.fxLayer.spawn(popupX, popupY, damage, 'normal');
+    this.damageMonster(monster, damage);
+  }
+
+  private updateHunterVolley(dt: number) {
+    const pb = this.hunterVolleyPlayback;
+    if (!pb && !this.skillVfx.isHunterVolleyFlying()) return;
+
+    if (this.skillVfx.isHunterVolleyFlying()) {
+      if (this.skillVfx.updateHunterVolley(dt)) {
+        this.applyPendingHunterVolley();
+        if (pb) pb.stagger = HUNTER_VOLLEY_INTERVAL_SEC;
       }
       return;
     }
 
-    if (pb.nextIndex >= pb.strikes.length) {
-      this.arrowRainPlayback = null;
-      this.finishCombat();
+    if (!pb) return;
+
+    if (pb.volleysLeft > 0) {
+      pb.stagger -= dt;
+      if (pb.stagger > 0) return;
+      this.fireNextHunterVolley();
       return;
     }
 
-    pb.stagger -= dt;
-    if (pb.stagger > 0) return;
-
-    this.launchNextArrowRainStrike();
-  }
-
-  private applyArrowRainStrike(strike: ArrowRainStrikePlan) {
-    const { targetX, targetY, damage, instanceId } = strike;
-    const monster = this.findMonsterByInstanceId(instanceId);
-
-    if (monster && monster.hp > 0) {
-      this.fxLayer.spawn(targetX, targetY, damage, 'normal');
-      this.damageMonster(monster, damage);
-    }
+    this.hunterVolleyPlayback = null;
+    this.finishCombat();
   }
 
   private findMonsterByInstanceId(id: string): BlockMonster | null {
@@ -1286,6 +1394,7 @@ export class BattleField extends Container {
 
     jb.wavesLeft--;
     jb.stagger = 0.28;
+    sfxJudgmentWave();
 
     for (const m of collectUniqueMonsters(this.grid)) {
       if (m.hp <= 0) continue;
@@ -1371,6 +1480,7 @@ export class BattleField extends Container {
   }
 
   private beginTurnSpawnStep() {
+    sfxSpawnRowPush();
     const result = pushGridOneRow(this.grid, { ...this.spawnState });
     this.grid = result.grid;
     this.spawnState.spawnRowOrdinal = result.spawnRowOrdinal;
@@ -1378,6 +1488,13 @@ export class BattleField extends Container {
     for (const hit of result.wallHits) {
       const { x, y } = this.monsterCenter(hit);
       this.playWallDetonateExplosion(x, y);
+    }
+    for (const crushed of result.bossCrushed) {
+      this.combatSession.clearWarlockPoison(crushed.instanceId);
+      this.specialRuntime.remove(crushed.instanceId);
+      const { x, y } = this.monsterCenter(crushed);
+      this.playWallDetonateExplosion(x, y, 0.9);
+      sfxBossCrush();
     }
     this.turnSpawnAnim!.wallHits.push(...result.wallHits);
     this.refreshBlocks();
@@ -1455,6 +1572,10 @@ export class BattleField extends Container {
     for (const id of finished) {
       anim.activeFalls.delete(id);
       this.monsterFallOffsetY.delete(id);
+      const monster = this.findMonsterByInstanceId(id);
+      const variant =
+        monster?.typeId === 'airdrop_red' ? 'airdrop_red' : 'airdrop_blue';
+      sfxAirdropLand(variant);
     }
     this.syncBlockSlideOffset();
 
@@ -1575,7 +1696,8 @@ export class BattleField extends Container {
 
   private finishCombat() {
     this.combatActive = false;
-    this.arrowRainPlayback = null;
+    this.hunterVolleyPlayback = null;
+    this.pendingHunterVolley = null;
     this.poisonTickPlayback = null;
     this.clearUltimateRoundState();
     this.combatSession.reset();
@@ -1703,6 +1825,9 @@ export class BattleField extends Container {
       poisonBadgeBg: null,
       poisonBadgeText: null,
       flashTime: 0,
+      flashDuration: BLOCK_HIT_FLASH_DURATION,
+      flashPoison: false,
+      flashClaw: false,
       shake: createShakeState(),
       anchorRow: m.anchorRow,
       anchorCol: m.anchorCol,
@@ -1793,12 +1918,58 @@ export class BattleField extends Container {
     view.poisonBadgeText.text = stacks > 99 ? '99+' : String(stacks);
   }
 
+  private flashOverlayFootprint(
+    view: BlockView,
+    fillColor: number,
+    fillAlpha: number,
+  ): void {
+    const w = (view.root.hitArea as Rectangle).width;
+    const h = (view.root.hitArea as Rectangle).height;
+    const pad = 2;
+    view.flashOverlay.clear();
+    view.flashOverlay.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
+    view.flashOverlay.fill({ color: fillColor, alpha: fillAlpha });
+    view.flashOverlay.tint = 0xffffff;
+  }
+
   private flashMonster(monster: BlockMonster) {
     const view = this.blockViews.get(monster.instanceId);
     if (!view) return;
+    view.flashPoison = false;
+    view.flashClaw = false;
+    this.flashOverlayFootprint(view, 0xffffff, 0.92);
     view.flashTime = BLOCK_HIT_FLASH_DURATION;
+    view.flashDuration = BLOCK_HIT_FLASH_DURATION;
     view.flashOverlay.visible = true;
     view.flashOverlay.alpha = 1;
+    extendHitShake(view.shake, this.battleClock);
+  }
+
+  /** 德鲁伊爪击：整块 footprint 绿色闪烁 */
+  private flashMonsterClaw(monster: BlockMonster) {
+    const view = this.blockViews.get(monster.instanceId);
+    if (!view) return;
+    view.flashClaw = true;
+    view.flashPoison = false;
+    this.flashOverlayFootprint(view, 0x55ee66, 0.9);
+    view.flashTime = CLAW_FLASH_DURATION;
+    view.flashDuration = CLAW_FLASH_DURATION;
+    view.flashOverlay.visible = true;
+    view.flashOverlay.alpha = 0.95;
+    extendHitShake(view.shake, this.battleClock);
+  }
+
+  /** 术士毒发：整块 footprint 紫色闪烁 */
+  private flashMonsterPoison(monster: BlockMonster) {
+    const view = this.blockViews.get(monster.instanceId);
+    if (!view) return;
+    view.flashPoison = true;
+    view.flashClaw = false;
+    this.flashOverlayFootprint(view, 0xcc66ff, 0.88);
+    view.flashTime = POISON_FLASH_DURATION;
+    view.flashDuration = POISON_FLASH_DURATION;
+    view.flashOverlay.visible = true;
+    view.flashOverlay.alpha = 0.95;
     extendHitShake(view.shake, this.battleClock);
   }
 
@@ -1808,9 +1979,19 @@ export class BattleField extends Container {
       view.flashTime -= dt;
       if (view.flashTime <= 0) {
         view.flashOverlay.visible = false;
+        if (view.flashPoison || view.flashClaw) {
+          view.flashPoison = false;
+          view.flashClaw = false;
+          this.flashOverlayFootprint(view, 0xffffff, 0.92);
+        }
         continue;
       }
-      view.flashOverlay.alpha = view.flashTime / BLOCK_HIT_FLASH_DURATION;
+      const dur = view.flashDuration > 0 ? view.flashDuration : BLOCK_HIT_FLASH_DURATION;
+      const t = view.flashTime / dur;
+      view.flashOverlay.alpha =
+        view.flashPoison || view.flashClaw
+          ? 0.35 + 0.6 * Math.sin(t * Math.PI)
+          : t;
     }
   }
 
@@ -1903,6 +2084,7 @@ export class BattleField extends Container {
     }
 
     if (action.kind === 'heal') {
+      sfxSpecialHeal();
       for (const t of action.targets) {
         this.skillVfx.spawnColorLine(
           action.fromX,
@@ -1914,6 +2096,7 @@ export class BattleField extends Container {
       }
     } else if (action.kind === 'jump') {
       if (!action.detonate) {
+        sfxSpecialJump();
         this.skillVfx.spawnColorLine(
           action.fromX,
           action.fromY,
@@ -1923,6 +2106,7 @@ export class BattleField extends Container {
         );
       }
     } else if (action.kind === 'spawn') {
+      sfxSpecialSpawn();
       this.skillVfx.spawnColorLine(
         action.fromX,
         action.fromY,
@@ -1957,6 +2141,7 @@ export class BattleField extends Container {
 
     if (action.kind === 'jump') {
       if (action.detonate) {
+        sfxSpecialDetonate();
         this.playWallDetonateExplosion(action.fromX, action.fromY);
         pb.phase = 'wait';
         pb.timer = 0.45;

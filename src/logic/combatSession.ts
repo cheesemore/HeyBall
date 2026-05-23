@@ -1,9 +1,9 @@
 import type { BallColor } from '../ballTypes';
 
 import {
-  HUNTER_ARROW_DAMAGE_RATIO,
   HUNTER_LAYER_CHANCE_BIG,
   HUNTER_LAYER_CHANCE_SMALL,
+  HUNTER_PIERCE_DAMAGE_RATIO,
   WARLOCK_POISON_DAMAGE_PER_STACK,
   WARLOCK_POISON_STACKS_BIG,
   WARLOCK_POISON_STACKS_SMALL,
@@ -19,7 +19,8 @@ export class CombatSessionState {
 
   hunterRainLayers = 0;
 
-  hunterArrowDamage = 0;
+  /** 本回合猎人小球攻击（取登记最大值） */
+  hunterBallAttack = 0;
 
   hasHunterBall = false;
 
@@ -49,7 +50,7 @@ export class CombatSessionState {
 
     this.hunterRainLayers = 0;
 
-    this.hunterArrowDamage = 0;
+    this.hunterBallAttack = 0;
 
     this.hasHunterBall = false;
 
@@ -78,17 +79,15 @@ export class CombatSessionState {
 
 
   registerHunterBall(smallBallAttack: number): void {
-
     this.hasHunterBall = true;
+    this.hunterBallAttack = Math.max(this.hunterBallAttack, smallBallAttack);
+  }
 
-    this.hunterArrowDamage = Math.max(
-
+  getHunterPierceArrowDamage(): number {
+    return Math.max(
       1,
-
-      Math.round(smallBallAttack * HUNTER_ARROW_DAMAGE_RATIO),
-
+      Math.round(this.hunterBallAttack * HUNTER_PIERCE_DAMAGE_RATIO),
     );
-
   }
 
 
@@ -133,12 +132,16 @@ export class CombatSessionState {
 
 
 
-  getArrowRainCount(): number {
-
+  /** 待消耗的猎人齐射层数（每层 = 并排 3 支贯通箭） */
+  getHunterVolleyCount(): number {
     if (!this.hasHunterBall) return 0;
-
     return this.hunterRainLayers;
+  }
 
+  consumeHunterVolleys(): number {
+    const n = this.hunterRainLayers;
+    this.hunterRainLayers = 0;
+    return n;
   }
 
 

@@ -50,13 +50,33 @@ export const MAGE_ARCANE_DAMAGE_RATIO = 1;
 
 
 
-/** 猎人（绿）·箭雨层数 */
+/** 猎人（绿）·贯通箭：每层消耗并排 3 支，每支 15% 小球攻击 */
 
 export const HUNTER_LAYER_CHANCE_SMALL = 0.3;
 
 export const HUNTER_LAYER_CHANCE_BIG = 1;
 
-export const HUNTER_ARROW_DAMAGE_RATIO = 1;
+/** 单支贯通箭伤害 = 猎人球攻击 × 此比例（3 支合计 45%） */
+
+export const HUNTER_PIERCE_DAMAGE_RATIO = 0.15;
+
+export const HUNTER_VOLLEY_ARROW_COUNT = 3;
+
+/** 并排箭横向间距（像素） */
+
+export const HUNTER_VOLLEY_PARALLEL_SPACING = 16;
+
+/** 两次齐射间隔（秒） */
+
+export const HUNTER_VOLLEY_INTERVAL_SEC = 0.1;
+
+/** 贯通箭飞行时长 */
+
+export const HUNTER_ARROW_FLIGHT_SEC = 0.2;
+
+/** 判定线宽（半宽，像素） */
+
+export const HUNTER_PIERCE_LINE_HALF_WIDTH = 14;
 
 
 
@@ -92,6 +112,9 @@ export const WARLOCK_POISON_STACKS_BIG = 3;
 
 export const WARLOCK_POISON_DAMAGE_PER_STACK = 0.05;
 
+/** 毒层 ≥ 此值时毒发飘字放大 */
+export const WARLOCK_POISON_HEAVY_STACKS = 5;
+
 
 
 /** 德鲁伊（橙）·爪击 */
@@ -101,5 +124,3 @@ export const DRUID_CLAW_CHANCE_SMALL = 0.2;
 export const DRUID_CLAW_CHANCE_BIG = 0.6;
 
 export const DRUID_CLAW_DAMAGE_RATIO = 1;
-
-

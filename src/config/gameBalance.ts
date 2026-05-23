@@ -4,6 +4,12 @@ export const TARGET_FPS = 60;
 /** 砖块受击闪白时长（秒） */
 export const BLOCK_HIT_FLASH_DURATION = 0.14;
 
+/** 术士毒发：目标整体紫色闪烁时长 */
+export const POISON_FLASH_DURATION = 0.22;
+
+/** 德鲁伊爪击：目标整体绿色闪烁时长 */
+export const CLAW_FLASH_DURATION = 0.24;
+
 /** 击败一只普通怪物奖励金币 */
 export const GOLD_PER_KILL = 5;
 

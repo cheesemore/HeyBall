@@ -75,6 +75,11 @@ export class LaunchCone extends Container {
     return this.visible;
   }
 
+  /** 当前瞄准中心角（弧度，Pixi 坐标系；摇摆中为实时值） */
+  getAimAngle(): number {
+    return this.centerAngle;
+  }
+
   /** 在冻结锥形张角内随机取发射角（弧度，Pixi 坐标系） */
   randomLaunchAngle(): number {
     const offset = (Math.random() * 2 - 1) * this.halfAngleRad;
