@@ -10,7 +10,7 @@ const DEG = Math.PI / 180;
 /** 默认朝向：向下（战场内） */
 const BASE_AIM = Math.PI / 2;
 
-type ConeMode = 'hidden' | 'sweeping' | 'frozen';
+type ConeMode = 'hidden' | 'static' | 'sweeping' | 'frozen';
 
 export class LaunchCone extends Container {
   private readonly gfx: Graphics;
@@ -36,9 +36,34 @@ export class LaunchCone extends Container {
     this.visible = false;
   }
 
-  showSweeping() {
-    this.mode = 'sweeping';
+  /** 备战：显示固定扇形，不摆动 */
+  showStatic() {
+    this.mode = 'static';
+    this.centerAngle = BASE_AIM;
     this.visible = true;
+    this.redraw();
+  }
+
+  /** 按住发射键：扇形开始左右摆动 */
+  startSweeping() {
+    if (this.mode === 'hidden') return;
+    this.mode = 'sweeping';
+    const offset = this.centerAngle - BASE_AIM;
+    if (this.sweepAmpRad > 1e-6) {
+      const s = Math.max(-1, Math.min(1, offset / this.sweepAmpRad));
+      this.sweepPhase = Math.asin(s);
+    } else {
+      this.sweepPhase = 0;
+    }
+    this.visible = true;
+    this.redraw();
+  }
+
+  /** 松开未发射时回到固定扇形 */
+  stopSweepingToStatic() {
+    if (this.mode !== 'sweeping') return;
+    this.mode = 'static';
+    this.centerAngle = BASE_AIM;
     this.redraw();
   }
 
@@ -112,7 +137,9 @@ export class LaunchCone extends Container {
     g.lineTo(x1, y1);
     g.arc(cx, cy, this.radius, a1, a2);
     g.lineTo(cx, cy);
-    g.fill({ color: 0xff3333, alpha: this.mode === 'frozen' ? 0.28 : 0.18 });
+    const fillAlpha =
+      this.mode === 'frozen' ? 0.28 : this.mode === 'sweeping' ? 0.22 : 0.16;
+    g.fill({ color: 0xff3333, alpha: fillAlpha });
 
     g.moveTo(cx, cy);
     g.lineTo(x1, y1);

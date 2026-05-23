@@ -65,7 +65,10 @@ export interface ControlViewState {
 export interface ControlAreaHandlers {
   onRecruit: () => void;
   onRogue: () => void;
-  onLaunch: () => void;
+  /** 按住发射键：开始瞄准摆动 */
+  onLaunchAimStart: () => void;
+  /** 松开发射键：按当前瞄准发射 */
+  onLaunchRelease: () => void;
   onMerge: (from: number, to: number) => void;
 }
 
@@ -91,6 +94,9 @@ export class ControlArea extends Container {
   private readonly onStageUp = (e: FederatedPointerEvent) => this.onGlobalUp(e);
   private readonly runningEffects: TickableEffect[] = [];
   private launchMask: Graphics | null = null;
+  private launchHolding = false;
+  private launchBtnDraw: ((pressed: boolean, hover: boolean) => void) | null = null;
+  private readonly onLaunchHoldUp = () => this.finishLaunchHold();
 
   constructor(handlers: ControlAreaHandlers) {
     super();
@@ -279,17 +285,27 @@ export class ControlArea extends Container {
     btn.cursor = 'pointer';
 
     const bg = new Graphics();
-    const draw = (hover: boolean) => {
+    const draw = (pressed: boolean, hover: boolean) => {
       bg.clear();
       bg.roundRect(0, 0, bw, bh, 12);
-      bg.fill(hover ? LAUNCH_RED_HOVER : LAUNCH_RED);
-      bg.stroke({ width: 3, color: 0xff6666 });
+      const fill = pressed
+        ? 0xaa1111
+        : hover
+          ? LAUNCH_RED_HOVER
+          : LAUNCH_RED;
+      bg.fill(fill);
+      bg.stroke({
+        width: pressed ? 4 : 3,
+        color: pressed ? 0xffffff : 0xff6666,
+        alpha: pressed ? 0.9 : 1,
+      });
     };
-    draw(false);
+    this.launchBtnDraw = draw;
+    draw(false, false);
     btn.addChild(bg);
 
     const t = new Text({
-      text: '发射',
+      text: '按住发射',
       style: {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
         fontSize: 26,
@@ -301,9 +317,16 @@ export class ControlArea extends Container {
     t.position.set(bw / 2, bh / 2);
     btn.addChild(t);
 
-    btn.on('pointertap', () => this.onLaunch());
-    btn.on('pointerover', () => draw(true));
-    btn.on('pointerout', () => draw(false));
+    btn.on('pointerdown', (e: FederatedPointerEvent) => {
+      e.stopPropagation();
+      this.beginLaunchHold();
+    });
+    btn.on('pointerover', () => {
+      if (!this.launchHolding) draw(false, true);
+    });
+    btn.on('pointerout', () => {
+      if (!this.launchHolding) draw(false, false);
+    });
     this.launchBtn = btn;
     this.addChild(btn);
   }
@@ -412,7 +435,10 @@ export class ControlArea extends Container {
       slot.root.cursor = value ? 'grab' : 'default';
     }
 
-    if (!value) this.cancelDrag();
+    if (!value) {
+      this.cancelDrag();
+      this.cancelLaunchHold(false);
+    }
   }
 
   /** 发射期间：半透明蒙版盖住控制区，球仍显示，禁止操作 */
@@ -463,9 +489,42 @@ export class ControlArea extends Container {
     this.handlers.onRogue();
   }
 
-  private onLaunch() {
+  private beginLaunchHold() {
+    if (!this.interactable || this.launchHolding) return;
+    this.launchHolding = true;
+    this.launchBtnDraw?.(true, false);
+    this.handlers.onLaunchAimStart();
+    this.attachLaunchHoldListeners();
+  }
+
+  private finishLaunchHold() {
+    if (!this.launchHolding) return;
+    this.launchHolding = false;
+    this.detachLaunchHoldListeners();
+    this.launchBtnDraw?.(false, false);
     if (!this.interactable) return;
-    this.handlers.onLaunch();
+    this.handlers.onLaunchRelease();
+  }
+
+  private cancelLaunchHold(fireRelease: boolean) {
+    if (!this.launchHolding) return;
+    this.launchHolding = false;
+    this.detachLaunchHoldListeners();
+    this.launchBtnDraw?.(false, false);
+    if (fireRelease && this.interactable) this.handlers.onLaunchRelease();
+  }
+
+  private attachLaunchHoldListeners() {
+    const stage = this.getStageRoot();
+    stage.eventMode = 'static';
+    stage.on('pointerup', this.onLaunchHoldUp);
+    stage.on('pointerupoutside', this.onLaunchHoldUp);
+  }
+
+  private detachLaunchHoldListeners() {
+    const stage = this.getStageRoot();
+    stage.off('pointerup', this.onLaunchHoldUp);
+    stage.off('pointerupoutside', this.onLaunchHoldUp);
   }
 
   private onCellPointerDown(index: number, e: FederatedPointerEvent) {

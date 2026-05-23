@@ -365,10 +365,22 @@ export class BattleField extends Container {
 
   showLaunchCone() {
     this.launchConeDismissed = false;
-    this.launchCone.showSweeping();
+    this.launchCone.showStatic();
   }
 
-  /** 备战阶段瞄准扇形当前指向（按下发射时读取） */
+  /** 按住发射键：扇形开始摆动 */
+  beginLaunchAimSweep() {
+    if (this.launchConeDismissed) return;
+    this.launchCone.startSweeping();
+  }
+
+  /** 未发射（条件不满足等）：扇形回到固定瞄准 */
+  cancelLaunchAimSweep() {
+    if (this.launchConeDismissed) return;
+    this.launchCone.stopSweepingToStatic();
+  }
+
+  /** 备战阶段瞄准扇形当前指向（松开发射时读取） */
   getLaunchAimAngle(): number {
     return this.launchCone.getAimAngle();
   }

@@ -3,6 +3,7 @@ import { bindAudioUnlock } from './audio/audioEngine';
 import { TARGET_FPS } from './config/gameBalance';
 import { GameManager } from './game/gameManager';
 import { AssetLoadingScreen } from './game/screens/AssetLoadingScreen';
+import { LoginScreen } from './game/screens/LoginScreen';
 import {
   GAME_WIDTH,
   GAME_HEIGHT,
@@ -46,6 +47,16 @@ async function bootstrap(): Promise<void> {
 
   const root = new Container();
   app.stage.addChild(root);
+
+  const login = new LoginScreen();
+  root.addChild(login);
+  login.mountNicknameInput(app.canvas);
+  const loginResult = await login.waitForStart();
+  login.teardownDom();
+  login.destroy({ children: true });
+  if (loginResult.nickname) {
+    console.info('[login]', loginResult.nickname);
+  }
 
   const loading = new AssetLoadingScreen();
   root.addChild(loading);

@@ -65,7 +65,8 @@ export class GameManager {
     this.control = new ControlArea({
       onRecruit: () => this.handleRecruit(),
       onRogue: () => this.handleRogue(),
-      onLaunch: () => this.handleLaunch(this.battle.getLaunchAimAngle()),
+      onLaunchAimStart: () => this.battle.beginLaunchAimSweep(),
+      onLaunchRelease: () => this.handleLaunch(this.battle.getLaunchAimAngle()),
       onMerge: (from, to) => this.handleMerge(from, to),
     });
 
@@ -398,7 +399,7 @@ export class GameManager {
     this.runBallEffectsText.position.set(0, 112);
 
     this.hudHintText = new Text({
-      text: '手动：招募/合成/发射\n自动：招募≤肉鸽40%先招，否则存钱肉鸽',
+      text: '手动：招募/合成/按住发射键瞄准\n自动：招募≤肉鸽40%先招，否则存钱肉鸽',
       style: {
         ...style,
         fontSize: 14,
@@ -711,6 +712,7 @@ export class GameManager {
       this.battle.isSpecialTurnAnimating() ||
       this.battle.isPrepareUltimateBusy()
     ) {
+      this.battle.cancelLaunchAimSweep();
       return;
     }
     this.syncBattleTargets();
@@ -729,7 +731,10 @@ export class GameManager {
     this.logic.consumePhaseBuff();
 
     const payload = this.logic.beginLaunch(angle);
-    if (!payload) return;
+    if (!payload) {
+      this.battle.cancelLaunchAimSweep();
+      return;
+    }
 
     this.control.hideBallsForLaunch();
     this.control.setInteractable(false);
