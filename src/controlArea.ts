@@ -90,6 +90,7 @@ export class ControlArea extends Container {
   private readonly onStageMove = (e: FederatedPointerEvent) => this.onGlobalMove(e);
   private readonly onStageUp = (e: FederatedPointerEvent) => this.onGlobalUp(e);
   private readonly runningEffects: TickableEffect[] = [];
+  private launchMask: Graphics | null = null;
 
   constructor(handlers: ControlAreaHandlers) {
     super();
@@ -414,15 +415,14 @@ export class ControlArea extends Container {
     if (!value) this.cancelDrag();
   }
 
-  /** 发射开始：隐藏格子内弹球外观，数据保留 */
+  /** 发射期间：半透明蒙版盖住控制区，球仍显示，禁止操作 */
   hideBallsForLaunch() {
-    for (const slot of this.slots) {
-      slot.ballLayer.visible = false;
-    }
+    this.showLaunchMask();
   }
 
-  /** 战斗结束：恢复格子内弹球显示 */
+  /** 战斗结束：去掉蒙版并刷新格子显示 */
   restoreBallsAfterLaunch() {
+    this.hideLaunchMask();
     for (let i = 0; i < CELL_COUNT; i++) {
       const item = this.gridData[i];
       const slot = this.slots[i]!;
@@ -432,6 +432,25 @@ export class ControlArea extends Container {
         slot.ballLayer.addChild(createBallVisual(item, Math.min(this.cellW, this.cellH)));
       }
     }
+  }
+
+  private showLaunchMask() {
+    if (this.launchMask) return;
+    const { width, height } = layout.control;
+    const mask = new Graphics();
+    mask.rect(0, 0, width, height);
+    mask.fill({ color: 0x050a18, alpha: 0.55 });
+    mask.eventMode = 'static';
+    mask.cursor = 'default';
+    mask.hitArea = new Rectangle(0, 0, width, height);
+    this.addChild(mask);
+    this.launchMask = mask;
+  }
+
+  private hideLaunchMask() {
+    if (!this.launchMask) return;
+    this.launchMask.destroy();
+    this.launchMask = null;
   }
 
   private onRecruit() {

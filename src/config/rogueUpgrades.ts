@@ -18,8 +18,11 @@ export interface RogueUpgradeDef {
   desc: string;
 }
 
+/** 第三种肉鸽：相对满额需求最多再存 100%（总上限为需求的 200%） */
+export const ROGUE_CHARGE_OVERCAP_RATIO = 1;
+
 const OVERCAP_DESC =
-  '充能可溢出上限继续存储；释放时仅扣除满额需求，每回合仍限施放一次';
+  '充能可溢出存储，最多额外 100%；释放时仅扣除满额需求，每回合仍限施放一次';
 
 export const ROGUE_UPGRADE_DEFS: Record<RogueUpgradeId, RogueUpgradeDef> = {
   judgment_waves_plus2: {

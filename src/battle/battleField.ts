@@ -328,6 +328,38 @@ export class BattleField extends Container {
     this.launchCone.showSweeping();
   }
 
+  hideLaunchCone() {
+    this.launchCone.hide();
+  }
+
+  /** 胜负后重开：清空战斗动画与战场（不触发 onCombatEnd） */
+  resetForNewRun(): void {
+    this.abortCombat();
+    this.arrowRainPlayback = null;
+    this.poisonTickPlayback = null;
+    this.clearUltimateRoundState();
+    this.combatSession.reset();
+    this.onCombatEnd = null;
+    this.turnSpawnAnim = null;
+    this.airdropAnim = null;
+    this.specialTurnPlayback = null;
+    this.judgmentPlayback = null;
+    this.judgmentOnComplete = null;
+    this.arrowRainPlayback = null;
+    this.poisonTickPlayback = null;
+    this.jumpAnims.clear();
+    this.birthAnims.clear();
+    this.monsterFallOffsetY.clear();
+    this.spawnSlideOffsetY = 0;
+    this.skillVfx.clear();
+    this.ultimateVfx.clear();
+    this.fxLayer.clear();
+    this.hideMonsterTip();
+    this.runMonsterGroupSpecialIds = [];
+    this.initBattle();
+    this.hideLaunchCone();
+  }
+
   setOnMonsterKill(handler: (monster: BlockMonster) => void) {
     this.onMonsterKill = handler;
   }
@@ -1268,6 +1300,11 @@ export class BattleField extends Container {
     return this.spawnState.bossSpawned;
   }
 
+  /** 本局累计刷怪行序号（达到 BOSS_SPAWN_ORDINAL 时出最终 Boss） */
+  getSpawnRowOrdinal(): number {
+    return this.spawnState.spawnRowOrdinal;
+  }
+
   /** 空降波：不推进，按扫描顺序依次从高空落下 */
   startAirDropAnim(
     variant: AirDropVariant,
@@ -1311,7 +1348,7 @@ export class BattleField extends Container {
 
   /** 从底线逐行推进刷怪，动画结束后回调（含撞墙砖列表） */
   startTurnSpawnAnim(onComplete: (wallHits: BlockMonster[]) => void) {
-    const rowCount = resolveTurnSpawnRowCount(this.grid);
+    const rowCount = resolveTurnSpawnRowCount(this.grid, this.spawnState);
     if (rowCount <= 0) {
       onComplete([]);
       return;
@@ -1362,9 +1399,12 @@ export class BattleField extends Container {
     if (t < 1) return;
 
     anim.stepsLeft--;
-    if (anim.stepsLeft > 0) {
+    if (anim.stepsLeft > 0 && !this.spawnState.bossSpawned) {
       this.beginTurnSpawnStep();
       return;
+    }
+    if (anim.stepsLeft > 0 && this.spawnState.bossSpawned) {
+      anim.stepsLeft = 0;
     }
 
     this.spawnSlideOffsetY = 0;

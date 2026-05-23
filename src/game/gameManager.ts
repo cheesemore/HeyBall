@@ -1,6 +1,7 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { formatRunBallEffectsLines } from '../config/ballCatalog';
 import { getRecruitCost } from '../config/recruitCost';
+import { BOSS_SPAWN_ORDINAL } from '../config/monsterSpawn';
 import { getRogueShopPrice, ROGUE_SHOP_MAX_PURCHASES } from '../config/rogueShop';
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
 import type { UltimateSkillId } from '../config/ultimateSkills';
@@ -14,6 +15,8 @@ import { layout } from '../layout';
 import { ScreenShake } from './screenShake';
 import { DraftScreen } from './draftScreen';
 import { MonsterGroupPickScreen } from './monsterGroupPickScreen';
+import { GameResultOverlay } from './gameResultOverlay';
+import { createEmptyControlSlots } from '../logic/controlGrid';
 import {
   decidePrepareAction,
   GameLogic,
@@ -41,6 +44,7 @@ export class GameManager {
   private rogueSkillOverlay: RogueSkillPickScreen | null = null;
   private rogueUpgradeOverlay: RogueUpgradePickScreen | null = null;
   private monsterGroupOverlay: MonsterGroupPickScreen | null = null;
+  private resultOverlay: GameResultOverlay | null = null;
   private readonly ultimatePanel: UltimateSkillPanel;
   private autoPlayEnabled = false;
   private autoPlayTimer = 0;
@@ -125,6 +129,19 @@ export class GameManager {
 
   private refreshDraftOverlay() {
     const state = this.logic.getState();
+
+    if (state.phase === 'victory' || state.phase === 'defeat') {
+      this.clearDraftOverlays();
+      this.battle.visible = true;
+      this.rightPanel.visible = true;
+      this.showResultOverlayIfNeeded();
+      return;
+    }
+
+    if (this.resultOverlay) {
+      this.resultOverlay.destroy();
+      this.resultOverlay = null;
+    }
 
     if (state.phase === 'rogue_skill_pick') {
       if (!this.rogueSkillOverlay) {
@@ -381,7 +398,7 @@ export class GameManager {
     this.runBallEffectsText.position.set(0, 112);
 
     this.hudHintText = new Text({
-      text: '手动：招募/合成/发射\n自动：招募→合成→瞄最高血',
+      text: '手动：招募/合成/发射\n自动：招募≤肉鸽40%先招，否则存钱肉鸽',
       style: {
         ...style,
         fontSize: 14,
@@ -465,6 +482,9 @@ export class GameManager {
     switch (action.type) {
       case 'recruit':
         this.handleRecruit();
+        break;
+      case 'rogue':
+        this.handleRogue();
         break;
       case 'merge':
         this.handleMerge(action.from, action.to);
@@ -580,6 +600,11 @@ export class GameManager {
     ) {
       return;
     }
+    if (state.phase === 'defeat' || state.phase === 'victory') {
+      this.showResultOverlayIfNeeded();
+      this.updateHud();
+      return;
+    }
     this.syncControlView();
     this.updateHud();
   }
@@ -592,7 +617,70 @@ export class GameManager {
     this.logic.onVictory();
     this.autoPlayEnabled = false;
     this.control.setInteractable(false);
-    this.updateHud();
+    this.battle.hideLaunchCone();
+    this.syncPresentation();
+  }
+
+  private onDefeat() {
+    this.autoPlayEnabled = false;
+    this.control.setInteractable(false);
+    this.battle.hideLaunchCone();
+    this.syncPresentation();
+  }
+
+  private showResultOverlayIfNeeded() {
+    const state = this.logic.getState();
+    if (state.phase !== 'victory' && state.phase !== 'defeat') return;
+    if (this.resultOverlay) return;
+
+    const victory = state.phase === 'victory';
+    this.resultOverlay = new GameResultOverlay(victory, () => this.restartRun());
+    this.root.addChild(this.resultOverlay);
+    this.control.setInteractable(false);
+  }
+
+  private clearDraftOverlays() {
+    if (this.rogueSkillOverlay) {
+      this.rogueSkillOverlay.destroy();
+      this.rogueSkillOverlay = null;
+    }
+    if (this.rogueUpgradeOverlay) {
+      this.rogueUpgradeOverlay.destroy();
+      this.rogueUpgradeOverlay = null;
+    }
+    if (this.monsterGroupOverlay) {
+      this.monsterGroupOverlay.destroy();
+      this.monsterGroupOverlay = null;
+    }
+    if (this.draftOverlay) {
+      this.draftOverlay.destroy();
+      this.draftOverlay = null;
+    }
+  }
+
+  private restartRun() {
+    if (this.resultOverlay) {
+      this.resultOverlay.destroy();
+      this.resultOverlay = null;
+    }
+    this.clearDraftOverlays();
+    this.autoPlayEnabled = false;
+    this.autoPlayTimer = 0;
+    this.mergeBonusPopT = -1;
+
+    this.logic.restart();
+    this.battle.resetForNewRun();
+    this.control.restoreBallsAfterLaunch();
+    this.control.applyControlState({
+      gold: 0,
+      recruitCost: getRecruitCost(0),
+      rogueCost: getRogueShopPrice(0),
+      rogueDisabled: false,
+      slots: createEmptyControlSlots(),
+    });
+    this.updateHunterHud();
+    this.refreshDraftOverlay();
+    this.syncPresentation();
   }
 
   private handleRecruit() {
@@ -657,7 +745,8 @@ export class GameManager {
   }
 
   private onCombatFinished() {
-    if (this.logic.getState().phase === 'victory') return;
+    const phase = this.logic.getState().phase;
+    if (phase === 'victory' || phase === 'defeat') return;
 
     this.updateHunterHud();
     this.logic.onCombatEndedStartSpawn();
@@ -673,6 +762,11 @@ export class GameManager {
         ]);
         this.logic.onSpawnFinished(dmg);
         this.control.restoreBallsAfterLaunch();
+        if (this.logic.getState().phase === 'defeat') {
+          this.onDefeat();
+          this.syncPresentation();
+          return;
+        }
         this.battle.showLaunchCone();
         this.control.setInteractable(true);
         this.syncPresentation();
@@ -690,7 +784,8 @@ export class GameManager {
   private updateHud() {
     const state = this.logic.getState();
     this.wallText.text = `城墙 ${state.wallHp} / ${state.wallMaxHp}`;
-    this.turnText.text = `回合 ${state.turn}`;
+    const rowOrdinal = this.battle.getSpawnRowOrdinal();
+    this.turnText.text = `回合 ${state.turn} · 总行数 ${rowOrdinal}/${BOSS_SPAWN_ORDINAL}`;
     this.mergeAttackBonusText.text = `合成攻击 +${state.mergeAttackBonusPercent}%`;
     const autoTag =
       this.autoPlayEnabled && state.phase === 'prepare' ? ' · 自动' : '';
@@ -711,7 +806,9 @@ export class GameManager {
     this.phaseText.text =
       state.phase === 'victory'
         ? '阶段：通关！'
-        : state.phase === 'monster_group_draft'
+        : state.phase === 'defeat'
+          ? '阶段：战败！城墙陷落'
+          : state.phase === 'monster_group_draft'
           ? '阶段：怪物组四选一'
           : state.phase === 'draft'
             ? '阶段：球组三选一'

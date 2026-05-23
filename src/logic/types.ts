@@ -18,6 +18,7 @@ export type GamePhase =
   | 'combat'
   | 'spawn'
   | 'victory'
+  | 'defeat'
   | 'rogue_skill_pick'
   | 'rogue_upgrade_pick';
 
@@ -103,6 +104,8 @@ export interface GameState {
 export type PrepareAction =
 
   | { type: 'recruit' }
+
+  | { type: 'rogue' }
 
   | { type: 'merge'; from: number; to: number }
 

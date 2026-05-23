@@ -1,4 +1,5 @@
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
+import { ROGUE_CHARGE_OVERCAP_RATIO } from '../config/rogueUpgrades';
 import {
   FROST_DAMAGE_TAKEN_MULT,
   JUDGMENT_WAVES,
@@ -9,7 +10,8 @@ import {
 
 export interface UltimateRunModifiers {
   chargeMax: number;
-  overcapStorage: boolean;
+  /** 充能进度上限（满额需求；有溢出升级时为需求的 200%） */
+  progressCap: number;
   judgmentExtraWaves: number;
   phaseExtraCrit: number;
   frostExtraVuln: number;
@@ -20,7 +22,7 @@ export function computeUltimateModifiers(
   upgrades: readonly RogueUpgradeId[],
 ): UltimateRunModifiers {
   let chargeMax = ULTIMATE_SKILLS[skill].chargeMax;
-  let overcapStorage = false;
+  let overcapEnabled = false;
   let judgmentExtraWaves = 0;
   let phaseExtraCrit = 0;
   let frostExtraVuln = 0;
@@ -34,7 +36,7 @@ export function computeUltimateModifiers(
         chargeMax -= 10_000;
         break;
       case 'judgment_overcap':
-        overcapStorage = true;
+        overcapEnabled = true;
         break;
       case 'phase_crit_plus20':
         phaseExtraCrit += 0.2;
@@ -43,7 +45,7 @@ export function computeUltimateModifiers(
         chargeMax -= 2000;
         break;
       case 'phase_overcap':
-        overcapStorage = true;
+        overcapEnabled = true;
         break;
       case 'frost_vuln_plus':
         frostExtraVuln += 0.25;
@@ -52,16 +54,21 @@ export function computeUltimateModifiers(
         chargeMax -= 24;
         break;
       case 'frost_overcap':
-        overcapStorage = true;
+        overcapEnabled = true;
         break;
       default:
         break;
     }
   }
 
+  const need = Math.max(1, chargeMax);
+  const progressCap = overcapEnabled
+    ? need * (1 + ROGUE_CHARGE_OVERCAP_RATIO)
+    : need;
+
   return {
-    chargeMax: Math.max(1, chargeMax),
-    overcapStorage,
+    chargeMax: need,
+    progressCap,
     judgmentExtraWaves,
     phaseExtraCrit,
     frostExtraVuln,

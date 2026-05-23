@@ -549,6 +549,8 @@ export class GameLogic {
 
   onCombatEndedStartSpawn() {
 
+    if (this.state.phase === 'defeat' || this.state.phase === 'victory') return;
+
     this.patch({ phase: 'spawn' });
 
   }
@@ -557,7 +559,14 @@ export class GameLogic {
 
   onSpawnFinished(wallDamage: number) {
 
-    if (this.state.phase === 'victory') return;
+    if (this.state.phase === 'victory' || this.state.phase === 'defeat') return;
+
+    const newWallHp = Math.max(0, this.state.wallHp - wallDamage);
+
+    if (newWallHp <= 0) {
+      this.patch({ wallHp: 0, phase: 'defeat' });
+      return;
+    }
 
     this.patch({
 
@@ -565,7 +574,7 @@ export class GameLogic {
 
       turn: this.state.turn + 1,
 
-      wallHp: Math.max(0, this.state.wallHp - wallDamage),
+      wallHp: newWallHp,
 
     });
 
@@ -576,6 +585,20 @@ export class GameLogic {
   onVictory() {
 
     this.patch({ phase: 'victory' });
+
+  }
+
+  onDefeat() {
+
+    this.patch({ phase: 'defeat', wallHp: 0 });
+
+  }
+
+  restart(): void {
+
+    this.state = createInitialGameState();
+
+    this.emit();
 
   }
 

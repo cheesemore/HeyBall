@@ -18,20 +18,21 @@ export function isUltimateReady(
   return state.progress >= mods.chargeMax;
 }
 
+function addCharge(
+  state: UltimateChargeState,
+  amount: number,
+  mods: UltimateRunModifiers,
+): void {
+  state.progress = Math.min(mods.progressCap, state.progress + amount);
+}
+
 export function addJudgmentCharge(
   state: UltimateChargeState,
   damage: number,
   mods: UltimateRunModifiers,
 ): void {
   if (state.skill !== 'judgment') return;
-  if (mods.overcapStorage) {
-    state.progress += damage;
-  } else {
-    state.progress = Math.min(
-      mods.chargeMax,
-      state.progress + damage,
-    );
-  }
+  addCharge(state, damage, mods);
 }
 
 export function addPhaseCharge(
@@ -40,11 +41,7 @@ export function addPhaseCharge(
   mods: UltimateRunModifiers,
 ): void {
   if (state.skill !== 'phase') return;
-  if (mods.overcapStorage) {
-    state.progress += hits;
-  } else {
-    state.progress = Math.min(mods.chargeMax, state.progress + hits);
-  }
+  addCharge(state, hits, mods);
 }
 
 export function addFrostCharge(
@@ -53,11 +50,7 @@ export function addFrostCharge(
   mods: UltimateRunModifiers,
 ): void {
   if (state.skill !== 'frost') return;
-  if (mods.overcapStorage) {
-    state.progress += kills;
-  } else {
-    state.progress = Math.min(mods.chargeMax, state.progress + kills);
-  }
+  addCharge(state, kills, mods);
 }
 
 export function consumeUltimateCharge(

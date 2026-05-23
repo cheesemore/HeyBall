@@ -9,12 +9,17 @@ import type { BlockMonster } from './monster';
 import {
   clearMonsterFromGrid,
   collectUniqueMonsters,
+  completePartialLargeMonsters,
   placeFootprintPartial,
 } from './monsterFootprint';
+import { BOSS_SPAWN_ORDINAL } from '../config/monsterSpawn';
 import {
   spawnIntoBottomRows,
+  tryCompleteBoss,
+  trySpawnBoss,
   type SpawnSessionState,
 } from './monsterSpawnLogic';
+import { getMonsterGrowthStep } from '../config/monsterScaling';
 
 /** 战场顶行（贴城墙） */
 export const TOP_GRID_ROW = 0;
@@ -115,17 +120,61 @@ export function pushGridWithNewRows(
   };
 }
 
-/** 推进 1 行并在底行刷怪 */
+/** 首领阶段：仅上移一行，不刷普通怪/精英 */
+export function pushGridBossPhase(
+  grid: MonsterGrid,
+  state: SpawnSessionState,
+): PushResult {
+  const wallHits: BlockMonster[] = [];
+  wallHits.push(...detonateTopRowMonsters(grid));
+
+  const next = createEmptyGrid();
+  for (const monster of collectUniqueMonsters(grid)) {
+    const nr = monster.anchorRow - 1;
+    if (nr < 0) continue;
+    monster.anchorRow = nr;
+    placeFootprintPartial(next, monster);
+  }
+
+  const growthStep = getMonsterGrowthStep(state.spawnRowOrdinal);
+  trySpawnBoss(next, state, growthStep);
+  tryCompleteBoss(next, state);
+  completePartialLargeMonsters(next);
+
+  wallHits.push(...detonateTopRowMonsters(next));
+
+  state.spawnRowOrdinal += 1;
+
+  return {
+    grid: next,
+    wallHits,
+    spawnRowOrdinal: state.spawnRowOrdinal,
+    bossSpawned: state.bossSpawned,
+  };
+}
+
+/** 推进 1 行并在底行刷怪（首领已出则只推进） */
 export function pushGridOneRow(
   grid: MonsterGrid,
   state: SpawnSessionState,
 ): PushResult {
+  if (state.bossSpawned) {
+    return pushGridBossPhase(grid, state);
+  }
   return pushGridWithNewRows(grid, 1, state);
 }
 
-/** 按当前场上行数决定本回合末刷几行 */
-export function resolveTurnSpawnRowCount(grid: MonsterGrid): number {
-  return getRowsToSpawnAfterTurn(countOccupiedRows(grid));
+/** 按场上行数决定本回合末推进几行；临近/处于首领阶段时限制为 1 行 */
+export function resolveTurnSpawnRowCount(
+  grid: MonsterGrid,
+  state: Pick<SpawnSessionState, 'bossSpawned' | 'spawnRowOrdinal'>,
+): number {
+  if (state.bossSpawned) return 1;
+
+  const normal = getRowsToSpawnAfterTurn(countOccupiedRows(grid));
+  const rowsUntilBoss = BOSS_SPAWN_ORDINAL - state.spawnRowOrdinal;
+  if (rowsUntilBoss <= 1) return 1;
+  return Math.min(normal, rowsUntilBoss);
 }
 
 export function damageBlock(m: BlockMonster, dmg: number): boolean {

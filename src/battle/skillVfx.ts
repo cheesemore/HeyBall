@@ -11,13 +11,14 @@ import {
   MONSTER_SIZE,
 } from '../layout';
 
-const ARROW_FLIGHT_SEC = 0.18;
+const ARROW_FLIGHT_SEC = 0.2;
 const ARROW_STAGGER_SEC = 0.032;
-const ARROW_TRAIL_SEGMENTS = 14;
+const ARROW_TRAIL_SEGMENTS = 24;
+const ARROW_IMPACT_DURATION = 0.32;
 
 const ARCANE_BURST_DURATION = 0.38;
-const CROSS_SLASH_DURATION = 0.28;
-const CROSS_EXTEND_PEAK = 0.14;
+const CROSS_SLASH_DURATION = 0.36;
+const CROSS_EXTEND_PEAK = 0.16;
 
 interface TimedFade {
   kind: 'fade';
@@ -98,6 +99,15 @@ interface WallExplosionVfx {
   scale: number;
 }
 
+interface ArrowImpactVfx {
+  kind: 'arrowImpact';
+  gfx: Graphics;
+  x: number;
+  y: number;
+  age: number;
+  duration: number;
+}
+
 type VfxEntry =
   | TimedFade
   | ArcaneBurstVfx
@@ -106,9 +116,11 @@ type VfxEntry =
   | PoisonBurstVfx
   | DruidClawVfx
   | ColorLineVfx
-  | WallExplosionVfx;
+  | WallExplosionVfx
+  | ArrowImpactVfx;
 
-const LIGHTNING_CHAIN_DURATION = 0.32;
+const LIGHTNING_CHAIN_DURATION = 0.42;
+const LIGHTNING_LAYERS = 5;
 const POISON_BURST_DURATION = 0.28;
 const DRUID_CLAW_DURATION = 0.26;
 const COLOR_LINE_DURATION = 0.22;
@@ -269,36 +281,106 @@ export class SkillVfxLayer extends Container {
     const g = a.gfx;
     g.clear();
 
+    const dx = a.toX - a.fromX;
+    const dy = a.toY - a.fromY;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+
     for (let i = ARROW_TRAIL_SEGMENTS; i >= 1; i--) {
-      const tu = Math.max(0, u - i * 0.045);
+      const tu = Math.max(0, u - i * 0.038);
       const tx = a.fromX + (a.toX - a.fromX) * tu;
       const ty = a.fromY + (a.toY - a.fromY) * tu;
-      const alpha = (1 - i / ARROW_TRAIL_SEGMENTS) * 0.55 * u;
-      const w = 1 + (1 - i / ARROW_TRAIL_SEGMENTS) * 2.5;
-      if (alpha < 0.03) continue;
-      g.moveTo(tx, ty - 6);
-      g.lineTo(tx, ty + 2);
-      g.stroke({ width: w, color: 0xadff2f, alpha });
+      const fade = (1 - i / ARROW_TRAIL_SEGMENTS) * u;
+      const alpha = fade * 0.65;
+      const w = 2 + (1 - i / ARROW_TRAIL_SEGMENTS) * 7;
+      if (alpha < 0.04) continue;
+
+      g.moveTo(tx - nx * 3, ty - ny * 3 - 8);
+      g.lineTo(tx + nx * 3, ty + ny * 3 + 4);
+      g.stroke({ width: w, color: 0x5a9a00, alpha: alpha * 0.45 });
+      g.moveTo(tx - nx * 2, ty - ny * 2 - 7);
+      g.lineTo(tx + nx * 2, ty + ny * 2 + 3);
+      g.stroke({ width: w * 0.65, color: 0xadff2f, alpha });
+
+      if (i % 3 === 0) {
+        const spark = 2 + (i % 5);
+        g.circle(tx + nx * 4, ty + ny * 4, spark);
+        g.fill({ color: 0xe8ff9a, alpha: alpha * 0.55 });
+      }
     }
 
     g.moveTo(a.fromX, a.fromY);
     g.lineTo(x, y);
-    g.stroke({ width: 2, color: 0x7cfc00, alpha: 0.35 * u });
+    g.stroke({ width: 5, color: 0x3d6b00, alpha: 0.4 * u });
+    g.stroke({ width: 3, color: 0x7cfc00, alpha: 0.55 * u });
 
-    g.moveTo(x, y - 16);
-    g.lineTo(x, y + 5);
-    g.stroke({ width: 3, color: 0x7cfc00, alpha: 0.95 });
-    g.circle(x, y + 5, 4);
-    g.fill({ color: 0xadff2f, alpha: 0.95 });
+    const headLen = 22;
+    const tipX = x - (dx / len) * headLen;
+    const tipY = y - (dy / len) * headLen;
+    g.moveTo(tipX, tipY);
+    g.lineTo(x + nx * 7, y + ny * 7);
+    g.lineTo(x - nx * 7, y - ny * 7);
+    g.closePath();
+    g.fill({ color: 0xc8ff70, alpha: 0.95 });
+    g.stroke({ width: 2.5, color: 0xffffff, alpha: 0.85 });
+
+    g.moveTo(x - nx * 4, y - ny * 4 - 10);
+    g.lineTo(x + nx * 4, y + ny * 4 + 6);
+    g.stroke({ width: 6, color: 0x7cfc00, alpha: 0.92 });
+    g.circle(x, y + 2, 6);
+    g.fill({ color: 0xadff2f, alpha: 0.9 });
+    g.circle(x, y + 2, 10);
+    g.stroke({ width: 2, color: 0xffffff, alpha: 0.5 * u });
   }
 
   private spawnArrowImpact(x: number, y: number): void {
     const g = new Graphics();
-    g.circle(x, y, 8);
-    g.fill({ color: 0xadff2f, alpha: 0.7 });
-    g.stroke({ width: 2, color: 0x7cfc00, alpha: 0.9 });
+    g.position.set(x, y);
     this.addChild(g);
-    this.entries.push({ kind: 'fade', gfx: g, age: 0, duration: 0.16 });
+    this.entries.push({
+      kind: 'arrowImpact',
+      gfx: g,
+      x,
+      y,
+      age: 0,
+      duration: ARROW_IMPACT_DURATION,
+    });
+  }
+
+  private drawArrowImpact(e: ArrowImpactVfx): void {
+    const t = Math.min(1, e.age / e.duration);
+    const fade = Math.max(0, 1 - t * 1.1);
+    const g = e.gfx;
+    g.clear();
+
+    const ring = 12 + t * 38;
+    g.circle(0, 0, ring);
+    g.stroke({ width: 5, color: 0x7cfc00, alpha: fade * 0.75 });
+    g.circle(0, 0, ring * 0.55);
+    g.fill({ color: 0xadff2f, alpha: fade * 0.5 });
+
+    g.circle(0, 0, 8 * (1 - t * 0.5));
+    g.fill({ color: 0xffffff, alpha: fade * 0.85 });
+
+    const particleN = 14;
+    for (let i = 0; i < particleN; i++) {
+      const ang = (i / particleN) * Math.PI * 2 + e.age * 2.2;
+      const dist = 6 + t * (22 + (i % 3) * 8);
+      const px = Math.cos(ang) * dist;
+      const py = Math.sin(ang) * dist;
+      const pr = 2.5 + (i % 2) * 1.5;
+      g.circle(px, py, pr);
+      g.fill({ color: i % 2 === 0 ? 0xe8ff9a : 0x7cfc00, alpha: fade * 0.9 });
+    }
+
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + 0.4;
+      const len = 10 + t * 28;
+      g.moveTo(0, 0);
+      g.lineTo(Math.cos(ang) * len, Math.sin(ang) * len);
+      g.stroke({ width: 3, color: 0xadff2f, alpha: fade * 0.65 });
+    }
   }
 
   private drawArcaneBurst(e: ArcaneBurstVfx): void {
@@ -338,37 +420,76 @@ export class SkillVfxLayer extends Container {
     }
   }
 
+  private lightningBoltPath(
+    g: Graphics,
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    segIndex: number,
+    pulse: number,
+    layerSeed: number,
+  ): void {
+    const segments = 9;
+    const jitterScale = (10 + layerSeed * 2.5) * pulse;
+    g.moveTo(a.x, a.y);
+    for (let s = 1; s <= segments; s++) {
+      const t = s / segments;
+      const mx = a.x + (b.x - a.x) * t;
+      const my = a.y + (b.y - a.y) * t;
+      const envelope = 1 - Math.abs(t - 0.5) * 1.6;
+      const jitter = envelope * jitterScale;
+      const jx =
+        mx +
+        Math.sin(t * 19 + segIndex * 3.1 + layerSeed) * jitter +
+        Math.sin(t * 7 + layerSeed * 2) * jitter * 0.35;
+      const jy =
+        my +
+        Math.cos(t * 15 + segIndex * 2.7 + layerSeed) * jitter +
+        Math.cos(t * 11 + layerSeed) * jitter * 0.35;
+      g.lineTo(jx, jy);
+    }
+  }
+
   private drawLightningChain(e: LightningChainVfx, pulse: number): void {
     const g = e.gfx;
     g.clear();
     const alpha = Math.max(0, 1 - e.age / e.duration);
     if (alpha <= 0.02) return;
 
-    for (let i = 1; i < e.points.length; i++) {
-      const a = e.points[i - 1]!;
-      const b = e.points[i]!;
-      const segments = 5;
-      let px = a.x;
-      let py = a.y;
-      g.moveTo(px, py);
-      for (let s = 1; s <= segments; s++) {
-        const t = s / segments;
-        const mx = a.x + (b.x - a.x) * t;
-        const my = a.y + (b.y - a.y) * t;
-        const jitter = (1 - Math.abs(t - 0.5) * 2) * 14 * pulse;
-        const jx = mx + (Math.sin(t * 17 + i) * jitter);
-        const jy = my + (Math.cos(t * 13 + i) * jitter);
-        g.lineTo(jx, jy);
-        px = jx;
-        py = jy;
+    const layerStyles: { width: number; color: number; alphaMult: number }[] = [
+      { width: 16, color: 0x1a4a8a, alphaMult: 0.35 },
+      { width: 11, color: 0x3399dd, alphaMult: 0.5 },
+      { width: 7, color: 0x55ccff, alphaMult: 0.75 },
+      { width: 4, color: 0xaaeeff, alphaMult: 0.9 },
+      { width: 2, color: 0xffffff, alphaMult: 1 },
+    ];
+
+    for (let layer = 0; layer < LIGHTNING_LAYERS; layer++) {
+      const style = layerStyles[layer]!;
+      for (let i = 1; i < e.points.length; i++) {
+        this.lightningBoltPath(
+          g,
+          e.points[i - 1]!,
+          e.points[i]!,
+          i,
+          pulse,
+          layer * 1.7 + e.age * 8,
+        );
+        g.stroke({
+          width: style.width,
+          color: style.color,
+          alpha: alpha * style.alphaMult,
+        });
       }
-      g.stroke({ width: 3, color: 0x66ccff, alpha: alpha * 0.95 });
-      g.stroke({ width: 1.5, color: 0xffffff, alpha: alpha * 0.75 });
     }
 
     for (const p of e.points) {
-      g.circle(p.x, p.y, 6 + pulse * 3);
-      g.fill({ color: 0xaaddff, alpha: alpha * 0.85 });
+      const nodeR = 10 + pulse * 5;
+      g.circle(p.x, p.y, nodeR + 6);
+      g.fill({ color: 0x2288cc, alpha: alpha * 0.35 });
+      g.circle(p.x, p.y, nodeR);
+      g.fill({ color: 0x66ccff, alpha: alpha * 0.75 });
+      g.circle(p.x, p.y, nodeR * 0.45);
+      g.fill({ color: 0xffffff, alpha: alpha * 0.95 });
     }
   }
 
@@ -410,7 +531,8 @@ export class SkillVfxLayer extends Container {
     const t = Math.min(1, e.age / e.duration);
     const extend = Math.min(1, t / CROSS_EXTEND_PEAK);
     const u = easeOutCubic(extend);
-    const fade = t < 0.55 ? 1 : Math.max(0, 1 - (t - 0.55) / 0.45);
+    const fade = t < 0.5 ? 1 : Math.max(0, 1 - (t - 0.5) / 0.5);
+    const flash = u >= 0.92 ? Math.sin((t - 0.5) * 28) * 0.5 + 0.5 : 0;
 
     const halfW = (e.right - e.left) / 2;
     const halfH = (e.bottom - e.top) / 2;
@@ -420,22 +542,49 @@ export class SkillVfxLayer extends Container {
     const g = e.gfx;
     g.clear();
 
-    const fillA = 0.78 * fade;
-    const strokeA = 0.65 * fade;
+    const glow = thick * 1.85;
+    const core = thick * 0.42;
+    const fillA = 0.82 * fade;
+    const glowA = 0.28 * fade;
+
+    const drawArmH = (y0: number, h: number, w: number, color: number, a: number) => {
+      g.roundRect(cx - w, y0, w * 2, h, Math.min(h / 2, w * 0.35));
+      g.fill({ color, alpha: a });
+    };
+    const drawArmV = (x0: number, w: number, h: number, color: number, a: number) => {
+      g.roundRect(x0, cy - h, w, h * 2, Math.min(w / 2, h * 0.35));
+      g.fill({ color, alpha: a });
+    };
+
+    drawArmH(cy - glow / 2, glow, armW, 0xff1493, glowA);
+    drawArmV(cx - glow / 2, glow, armH, 0xff1493, glowA);
+
+    drawArmH(cy - thick / 2, thick, armW, 0xff69b4, fillA);
+    drawArmV(cx - thick / 2, thick, armH, 0xff69b4, fillA);
+
+    drawArmH(cy - core / 2, core, armW * 0.98, 0xffb6e8, fillA * 0.9);
+    drawArmV(cx - core / 2, core, armH * 0.98, 0xffb6e8, fillA * 0.9);
 
     g.rect(cx - armW, cy - thick / 2, armW * 2, thick);
-    g.fill({ color: 0xff69b4, alpha: fillA });
+    g.stroke({ width: 3, color: 0xffffff, alpha: 0.55 * fade });
     g.rect(cx - thick / 2, cy - armH, thick, armH * 2);
-    g.fill({ color: 0xff69b4, alpha: fillA });
+    g.stroke({ width: 3, color: 0xffffff, alpha: 0.55 * fade });
 
-    g.rect(cx - armW, cy - thick / 2, armW * 2, thick);
-    g.stroke({ width: 2, color: 0xffffff, alpha: strokeA });
-    g.rect(cx - thick / 2, cy - armH, thick, armH * 2);
-    g.stroke({ width: 2, color: 0xffffff, alpha: strokeA });
+    if (u > 0.15) {
+      const slashLen = Math.min(armW, armH) * 0.35 * u;
+      for (const sign of [-1, 1]) {
+        g.moveTo(cx - slashLen, cy - slashLen * sign);
+        g.lineTo(cx + slashLen, cy + slashLen * sign);
+        g.stroke({ width: 2.5, color: 0xffffff, alpha: 0.4 * fade });
+      }
+    }
 
-    if (u >= 0.98) {
-      g.circle(cx, cy, thick * 0.9);
-      g.fill({ color: 0xffffff, alpha: 0.35 * fade });
+    if (u >= 0.95) {
+      const burst = thick * (1.2 + flash * 0.5);
+      g.circle(cx, cy, burst);
+      g.fill({ color: 0xffffff, alpha: (0.45 + flash * 0.35) * fade });
+      g.circle(cx, cy, burst * 1.8);
+      g.stroke({ width: 4, color: 0xff69b4, alpha: 0.5 * fade });
     }
   }
 
@@ -569,6 +718,15 @@ export class SkillVfxLayer extends Container {
       if (e.kind === 'lightning') {
         const pulse = 1 - e.age / e.duration;
         this.drawLightningChain(e, pulse);
+        if (e.age >= e.duration) {
+          e.gfx.destroy();
+          this.entries.splice(i, 1);
+        }
+        continue;
+      }
+
+      if (e.kind === 'arrowImpact') {
+        this.drawArrowImpact(e);
         if (e.age >= e.duration) {
           e.gfx.destroy();
           this.entries.splice(i, 1);

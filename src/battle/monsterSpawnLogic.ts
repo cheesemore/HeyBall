@@ -28,13 +28,13 @@ export interface SpawnSessionState {
   specialTypeIds: MonsterTypeId[];
 }
 
-/** 首领：固定 4×4 居中，可跨多次刷行拼齐 */
+/** 首领：固定 4×4 贴底居中，达刷行序号后尝试生成（可跨回合拼齐） */
 export function trySpawnBoss(
   grid: MonsterGrid,
   state: SpawnSessionState,
   growthStep: number,
 ): boolean {
-  if (state.bossSpawned || state.spawnRowOrdinal !== BOSS_SPAWN_ORDINAL) {
+  if (state.bossSpawned || state.spawnRowOrdinal < BOSS_SPAWN_ORDINAL) {
     return false;
   }
 
@@ -114,28 +114,34 @@ export function fillNormalCellsOnRow(
   }
 }
 
-/** 对一批底行刷怪：首领 > 补全 > 精英 > 普通 */
+/** 对一批底行刷怪：首领 > 补全 > 精英 > 普通（首领已出则不再刷怪） */
 export function spawnIntoBottomRows(
   grid: MonsterGrid,
   targetRows: number[],
   state: SpawnSessionState,
 ): number {
   let ordinal = state.spawnRowOrdinal;
+  const bossPhase = state.bossSpawned;
 
   for (const targetRow of targetRows) {
     const growthStep = getMonsterGrowthStep(ordinal);
 
-    trySpawnBoss(grid, state, growthStep);
-    tryCompleteBoss(grid, state);
-    completePartialLargeMonsters(grid);
+    if (!bossPhase) {
+      trySpawnBoss(grid, state, growthStep);
+      tryCompleteBoss(grid, state);
+      completePartialLargeMonsters(grid);
 
-    if (ordinal >= ELITE_SPAWN_MIN_ORDINAL && Math.random() < ELITE_SPAWN_CHANCE) {
-      trySpawnEliteOnRow(grid, targetRow, growthStep);
+      if (ordinal >= ELITE_SPAWN_MIN_ORDINAL && Math.random() < ELITE_SPAWN_CHANCE) {
+        trySpawnEliteOnRow(grid, targetRow, growthStep);
+      }
+
+      completePartialLargeMonsters(grid);
+      fillNormalCellsOnRow(grid, targetRow, growthStep, state);
+      completePartialLargeMonsters(grid);
+    } else {
+      tryCompleteBoss(grid, state);
+      completePartialLargeMonsters(grid);
     }
-
-    completePartialLargeMonsters(grid);
-    fillNormalCellsOnRow(grid, targetRow, growthStep, state);
-    completePartialLargeMonsters(grid);
 
     ordinal++;
   }

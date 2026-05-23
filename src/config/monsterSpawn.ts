@@ -10,11 +10,12 @@ export const BOSS_BASE_HP = 3200;
 export const ELITE_FOOTPRINT_W = 2;
 export const ELITE_FOOTPRINT_H = 2;
 
-/** 首领 footprint（战场 8×9 格，居中 4×4） */
+/** 首领 footprint（战场 8×9 格，底边对齐 4×4） */
 export const BOSS_FOOTPRINT_W = 4;
 export const BOSS_FOOTPRINT_H = 4;
 export const BOSS_ANCHOR_COL = Math.floor((BLOCK_COLS - BOSS_FOOTPRINT_W) / 2);
-export const BOSS_ANCHOR_ROW = Math.floor((BLOCK_ROWS - BOSS_FOOTPRINT_H) / 2);
+/** 锚点行：使 4×4 占满最底四行 */
+export const BOSS_ANCHOR_ROW = BLOCK_ROWS - BOSS_FOOTPRINT_H;
 
 /** 累计刷出行 ≥ 此值后，每行有概率刷精英 */
 export const ELITE_SPAWN_MIN_ORDINAL = 8;
