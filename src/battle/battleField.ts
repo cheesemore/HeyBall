@@ -236,7 +236,8 @@ export class BattleField extends Container {
   private launchConeDismissed = false;
   private spawnState: SpawnSessionState = {
     spawnRowOrdinal: 0,
-    bossSpawned: false,
+    bossActive: false,
+    bossesDefeated: 0,
     specialTypeIds: [],
   };
   private runMonsterGroupSpecialIds: MonsterTypeId[] = [];
@@ -306,7 +307,8 @@ export class BattleField extends Container {
     this.grid = createEmptyGrid();
     this.spawnState = {
       spawnRowOrdinal: 0,
-      bossSpawned: false,
+      bossActive: false,
+    bossesDefeated: 0,
       specialTypeIds: [...this.runMonsterGroupSpecialIds],
     };
     const savedSpecials = this.spawnState.specialTypeIds;
@@ -1375,6 +1377,8 @@ export class BattleField extends Container {
     this.removeMonsterView(monster);
 
     if (monster.typeId === 'boss') {
+      this.spawnState.bossActive = false;
+      this.spawnState.bossesDefeated += 1;
       this.onBossDefeated?.();
       this.abortCombat();
       return;
@@ -1417,11 +1421,20 @@ export class BattleField extends Container {
     this.triggerScreenShake?.(0.22, 12);
   }
 
-  isBossSpawned(): boolean {
-    return this.spawnState.bossSpawned;
+  isBossActive(): boolean {
+    return this.spawnState.bossActive;
   }
 
-  /** 本局累计刷怪行序号（达到 BOSS_SPAWN_ORDINAL 时出最终 Boss） */
+  /** @deprecated 使用 isBossActive */
+  isBossSpawned(): boolean {
+    return this.isBossActive();
+  }
+
+  getBossesDefeated(): number {
+    return this.spawnState.bossesDefeated;
+  }
+
+  /** 本局累计刷出行序号（首领战期间暂停增长） */
   getSpawnRowOrdinal(): number {
     return this.spawnState.spawnRowOrdinal;
   }
@@ -1496,7 +1509,7 @@ export class BattleField extends Container {
     const result = pushGridOneRow(this.grid, { ...this.spawnState });
     this.grid = result.grid;
     this.spawnState.spawnRowOrdinal = result.spawnRowOrdinal;
-    this.spawnState.bossSpawned = result.bossSpawned;
+    this.spawnState.bossActive = result.bossActive;
     for (const hit of result.wallHits) {
       const { x, y } = this.monsterCenter(hit);
       this.playWallDetonateExplosion(x, y);
@@ -1528,11 +1541,11 @@ export class BattleField extends Container {
     if (t < 1) return;
 
     anim.stepsLeft--;
-    if (anim.stepsLeft > 0 && !this.spawnState.bossSpawned) {
+    if (anim.stepsLeft > 0 && !this.spawnState.bossActive) {
       this.beginTurnSpawnStep();
       return;
     }
-    if (anim.stepsLeft > 0 && this.spawnState.bossSpawned) {
+    if (anim.stepsLeft > 0 && this.spawnState.bossActive) {
       anim.stepsLeft = 0;
     }
 

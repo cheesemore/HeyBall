@@ -1,7 +1,7 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { formatRunBallEffectsLines } from '../config/ballCatalog';
 import { getRecruitCost } from '../config/recruitCost';
-import { BOSS_SPAWN_ORDINAL } from '../config/monsterSpawn';
+import { getNextBossSpawnOrdinal } from '../config/monsterSpawn';
 import { getRogueShopPrice, ROGUE_SHOP_MAX_PURCHASES } from '../config/rogueShop';
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
 import type { UltimateSkillId } from '../config/ultimateSkills';
@@ -122,7 +122,7 @@ export class GameManager {
     this.battle.setOnMonsterKill((monster) => {
       this.logic.addGold(GameLogic.goldForKill(monster.typeId));
     });
-    this.battle.setOnBossDefeated(() => this.onVictory());
+    this.battle.setOnBossDefeated(() => this.updateHud());
 
     this.syncPresentation();
     this.refreshDraftOverlay();
@@ -614,14 +614,6 @@ export class GameManager {
     this.logic.syncBattleMonsters(this.battle.getMonsterSnapshots());
   }
 
-  private onVictory() {
-    this.logic.onVictory();
-    this.autoPlayEnabled = false;
-    this.control.setInteractable(false);
-    this.battle.hideLaunchCone();
-    this.syncPresentation();
-  }
-
   private onDefeat() {
     this.autoPlayEnabled = false;
     this.control.setInteractable(false);
@@ -778,7 +770,7 @@ export class GameManager {
       });
     };
 
-    if (shouldTriggerAirDrop(turn, this.battle.isBossSpawned())) {
+    if (shouldTriggerAirDrop(turn, this.battle.isBossActive())) {
       const variant = resolveAirDropVariant(turn);
       this.battle.startAirDropAnim(variant, finishSpawn);
     } else {
@@ -790,12 +782,14 @@ export class GameManager {
     const state = this.logic.getState();
     this.wallText.text = `城墙 ${state.wallHp} / ${state.wallMaxHp}`;
     const rowOrdinal = this.battle.getSpawnRowOrdinal();
-    this.turnText.text = `回合 ${state.turn} · 总行数 ${rowOrdinal}/${BOSS_SPAWN_ORDINAL}`;
+    const nextBoss = getNextBossSpawnOrdinal(this.battle.getBossesDefeated());
+    const bossTag = this.battle.isBossActive() ? ' · 首领战' : '';
+    this.turnText.text = `回合 ${state.turn} · 波次 ${rowOrdinal}${bossTag} · 下次首领 ${nextBoss}`;
     this.mergeAttackBonusText.text = `合成攻击 +${state.mergeAttackBonusPercent}%`;
     const autoTag =
       this.autoPlayEnabled && state.phase === 'prepare' ? ' · 自动' : '';
     const spawnTag =
-      state.phase === 'spawn' && shouldTriggerAirDrop(state.turn, this.battle.isBossSpawned())
+      state.phase === 'spawn' && shouldTriggerAirDrop(state.turn, this.battle.isBossActive())
         ? ' · 空降'
         : '';
     const colors = state.runBallColors;

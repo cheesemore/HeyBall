@@ -7,11 +7,11 @@ import {
   BOSS_ANCHOR_ROW,
   BOSS_FOOTPRINT_H,
   BOSS_FOOTPRINT_W,
-  BOSS_SPAWN_ORDINAL,
   ELITE_FOOTPRINT_H,
   ELITE_FOOTPRINT_W,
   ELITE_SPAWN_CHANCE,
   ELITE_SPAWN_MIN_ORDINAL,
+  getNextBossSpawnOrdinal,
 } from '../config/monsterSpawn';
 import type { MonsterTypeId } from '../config/monsterTable';
 import { rollNormalSpawnTypeId } from '../logic/rollSpecialSpawn';
@@ -27,7 +27,10 @@ import type { MonsterGrid } from './monsterGrid';
 
 export interface SpawnSessionState {
   spawnRowOrdinal: number;
-  bossSpawned: boolean;
+  /** 场上是否存在存活首领（首领战期间暂停刷行计数与空降） */
+  bossActive: boolean;
+  /** 已击败首领数量，用于计算下一首领刷出行 */
+  bossesDefeated: number;
   /** 本局启用的特殊怪 typeId（空=仅普通灰砖） */
   specialTypeIds: MonsterTypeId[];
 }
@@ -37,8 +40,10 @@ export function trySpawnBoss(
   grid: MonsterGrid,
   state: SpawnSessionState,
   growthStep: number,
+  rowOrdinal: number,
 ): BlockMonster[] {
-  if (state.bossSpawned || state.spawnRowOrdinal < BOSS_SPAWN_ORDINAL) {
+  if (state.bossActive) return [];
+  if (rowOrdinal < getNextBossSpawnOrdinal(state.bossesDefeated)) {
     return [];
   }
 
@@ -53,14 +58,14 @@ export function trySpawnBoss(
   const boss = createMonsterInstance('boss', BOSS_ANCHOR_ROW, BOSS_ANCHOR_COL, growthStep);
   const placed = placeFootprintPartial(grid, boss);
   if (placed > 0) {
-    state.bossSpawned = true;
+    state.bossActive = true;
   }
   return crushed;
 }
 
 /** 继续铺满场上首领的剩余格子 */
 export function tryCompleteBoss(grid: MonsterGrid, state: SpawnSessionState): void {
-  if (!state.bossSpawned) return;
+  if (!state.bossActive) return;
   for (let r = 0; r < BLOCK_ROWS; r++) {
     for (let c = 0; c < BLOCK_COLS; c++) {
       const m = grid[r]![c];
@@ -130,37 +135,41 @@ export interface SpawnBottomRowsResult {
   bossCrushed: BlockMonster[];
 }
 
-/** 对一批底行刷怪：首领 > 补全 > 精英 > 普通（首领已出则不再刷怪） */
+/** 对一批底行刷怪：首领 > 补全 > 精英 > 普通（首领在场时仅推进首领、不刷杂兵） */
 export function spawnIntoBottomRows(
   grid: MonsterGrid,
   targetRows: number[],
   state: SpawnSessionState,
 ): SpawnBottomRowsResult {
   let ordinal = state.spawnRowOrdinal;
-  const bossPhase = state.bossSpawned;
+  const bossPhase = state.bossActive;
   const bossCrushed: BlockMonster[] = [];
 
   for (const targetRow of targetRows) {
     const growthStep = getMonsterGrowthStep(ordinal);
 
     if (!bossPhase) {
-      bossCrushed.push(...trySpawnBoss(grid, state, growthStep));
+      bossCrushed.push(...trySpawnBoss(grid, state, growthStep, ordinal));
       tryCompleteBoss(grid, state);
       completePartialLargeMonsters(grid);
 
-      if (ordinal >= ELITE_SPAWN_MIN_ORDINAL && Math.random() < ELITE_SPAWN_CHANCE) {
-        trySpawnEliteOnRow(grid, targetRow, growthStep);
-      }
+      if (!state.bossActive) {
+        if (ordinal >= ELITE_SPAWN_MIN_ORDINAL && Math.random() < ELITE_SPAWN_CHANCE) {
+          trySpawnEliteOnRow(grid, targetRow, growthStep);
+        }
 
-      completePartialLargeMonsters(grid);
-      fillNormalCellsOnRow(grid, targetRow, growthStep, state);
-      completePartialLargeMonsters(grid);
+        completePartialLargeMonsters(grid);
+        fillNormalCellsOnRow(grid, targetRow, growthStep, state);
+        completePartialLargeMonsters(grid);
+      }
     } else {
       tryCompleteBoss(grid, state);
       completePartialLargeMonsters(grid);
     }
 
-    ordinal++;
+    if (!state.bossActive) {
+      ordinal++;
+    }
   }
 
   state.spawnRowOrdinal = ordinal;

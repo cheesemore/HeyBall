@@ -48,9 +48,9 @@ export interface AirDropApplyResult {
 
 
 
-export function shouldTriggerAirDrop(turn: number, bossSpawned: boolean): boolean {
+export function shouldTriggerAirDrop(turn: number, bossActive: boolean): boolean {
 
-  if (bossSpawned) return false;
+  if (bossActive) return false;
 
   return turn > 0 && turn % AIRDROP_INTERVAL_TURNS === 0;
 
