@@ -1,0 +1,1968 @@
+import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import type { LaunchBallUnit } from '../ballComposition';
+import {
+  BALL_GRAVITY,
+  CRIT_DAMAGE_MULTIPLIER,
+  getBallCombatStats,
+} from '../config/ballStats';
+import {
+  WARRIOR_BIG_SPLIT_CHANCE,
+  WARRIOR_BIG_SPLIT_COUNT,
+  WARRIOR_SPLIT_ANGLE_SPREAD_DEG,
+  WARRIOR_SPLIT_ATTACK_RATIO,
+  WARRIOR_SPLIT_BOUNCES_RATIO,
+  WARRIOR_SPLIT_CHANCE,
+  WARRIOR_SPLIT_COUNT,
+  WARRIOR_SPLIT_SIZE_RATIO,
+} from '../config/ballSkills';
+import { getBattleBallRadius } from '../config/gameBalance';
+import {
+  getMonsterHpTextFill,
+  getMonsterType,
+  type MonsterTypeId,
+} from '../config/monsterTable';
+import {
+  BLOCK_COLS,
+  BLOCK_ROWS,
+  BALL_LAUNCH_INTERVAL,
+  BLOCK_HIT_FLASH_DURATION,
+  INITIAL_SPAWN_ROWS,
+  ROW_SPAWN_ANIM_STEP_SEC,
+} from '../config/gameBalance';
+import {
+  battleGridRowTopY,
+  battleLaunchLocalY,
+  battleSpawnLineLocalY,
+  layout,
+  MONSTER_SIZE,
+  BATTLE_WIDTH,
+  BATTLE_HEIGHT,
+} from '../layout';
+import { planArrowRain, type ArrowRainStrikePlan } from '../logic/arrowRainPlanner';
+import { pickLightningChainTargets } from '../logic/shamanChain';
+import { getMonsterGrowthStep } from '../config/monsterScaling';
+import { getMonsterTip } from '../config/monsterTips';
+import { applyAirDrop, type AirDropVariant } from './airdropLogic';
+import {
+  AIRDROP_FALL_DURATION_SEC,
+  AIRDROP_FALL_START_OFFSET,
+  AIRDROP_STAGGER_SEC,
+} from '../config/airdrop';
+import { ARROW_STAGGER_SEC } from './skillVfx';
+import { resolveCircleAABB } from './ballCollision';
+import { BallEntity } from './ballEntity';
+import { LaunchCone } from './launchCone';
+import { isAnchorCell, type BlockMonster } from './monster';
+import { getSpecialMonsterDef, isSpecialMonsterType } from '../config/specialMonsters';
+import { SpecialMonsterRuntime } from './specialMonsterRuntime';
+import {
+  MONSTER_BIRTH_DURATION,
+  startMonsterBirthAnim,
+  tickMonsterBirthAnim,
+  type MonsterBirthAnim,
+} from './monsterBirthAnim';
+import {
+  planAndApplySpecialMonsterTurn,
+  type SpecialEnemyAction,
+} from './specialMonsterTurnEnd';
+import { MonsterTooltip } from './monsterTooltip';
+import { collectUniqueMonsters, getFootprintAabb } from './monsterFootprint';
+import {
+  createEmptyGrid,
+  damageBlock,
+  fillRowsFromSpawn,
+  killMonsterOnGrid,
+  pushGridOneRow,
+  resolveTurnSpawnRowCount,
+  type MonsterGrid,
+} from './monsterGrid';
+import type { MonsterSnapshot } from '../logic/types';
+import type { SpawnSessionState } from './monsterSpawnLogic';
+import {
+  BLOCK_CORNER_RADIUS,
+  createShakeState,
+  drawMonsterBlock,
+  extendHitShake,
+  updateMonsterShake,
+  type MonsterShakeState,
+} from './blockHitFeedback';
+import { DamagePopupLayer, type PopupStyle } from './damagePopup';
+import { SkillVfxLayer } from './skillVfx';
+import { UltimateVfxLayer } from './ultimateVfx';
+import {
+  FROST_DAMAGE_RATIO,
+  FROST_DAMAGE_TAKEN_MULT,
+  JUDGMENT_DAMAGE_RATIO,
+  JUDGMENT_WAVES,
+  PHASE_CRIT_BONUS,
+  PHASE_EXTRA_BOUNCES,
+  PHASE_SPEED_MULT,
+} from '../config/ultimateSkills';
+import { CombatSessionState } from '../logic/combatSession';
+import { DRUID_CLAW_DAMAGE_RATIO } from '../config/ballSkills';
+import {
+  getMageArcaneRadius,
+  knightCrossDamage,
+  mageArcaneDamage,
+  rollDruidClawProc,
+  rollHitDamage,
+  rollKnightCrossProc,
+  rollMageArcaneProc,
+  rollShamanChainProc,
+  shamanChainBaseDamage,
+} from '../logic/skillResolver';
+
+const LAUNCH_X = BATTLE_WIDTH / 2;
+const LAUNCH_Y = battleLaunchLocalY();
+/** 砖块逻辑顶行（黄线） */
+const BATTLE_TOP_LINE_Y = battleGridRowTopY(0);
+const SPAWN_LINE_LOCAL_Y = battleSpawnLineLocalY();
+const POISON_TICK_STAGGER_SEC = 0.045;
+const ANNIHILATE_DESTROY_BALL_CHANCE = 0.1;
+const SPECIAL_LINE_SEC = 0.22;
+const SPECIAL_JUMP_SEC = 0.36;
+const SPECIAL_ACTION_GAP_SEC = 0.05;
+
+interface BlockView {
+  root: Container;
+  shakeBody: Container;
+  hpText: Text;
+  flashOverlay: Graphics;
+  frostOverlay: Graphics | null;
+  chargeSweepOverlay: Graphics | null;
+  chargeSweepPhase: number;
+  poisonBadgeBg: Graphics | null;
+  poisonBadgeText: Text | null;
+  flashTime: number;
+  shake: MonsterShakeState;
+  anchorRow: number;
+  anchorCol: number;
+}
+
+interface TurnSpawnAnim {
+  stepsLeft: number;
+  stepTime: number;
+  wallHits: BlockMonster[];
+  onComplete: (wallHits: BlockMonster[]) => void;
+}
+
+interface AirDropFallState {
+  age: number;
+}
+
+interface AirDropAnim {
+  fallQueue: string[];
+  nextRelease: number;
+  activeFalls: Map<string, AirDropFallState>;
+  staggerTimer: number;
+  onComplete: (wallHits: BlockMonster[]) => void;
+}
+
+interface JumpAnimState {
+  age: number;
+  duration: number;
+  fromY: number;
+  toY: number;
+}
+
+interface SpecialTurnPlayback {
+  actions: SpecialEnemyAction[];
+  index: number;
+  phase: 'line' | 'effect' | 'wait';
+  timer: number;
+  wallHits: BlockMonster[];
+  onComplete: (wallHits: BlockMonster[]) => void;
+}
+
+export class BattleField extends Container {
+  private grid: MonsterGrid = createEmptyGrid();
+  private readonly blockLayer = new Container();
+  private readonly coneLayer = new Container();
+  private readonly fxLayer = new DamagePopupLayer();
+  private readonly skillVfx = new SkillVfxLayer();
+  private readonly ballLayer = new Container();
+  private readonly monsterTooltip = new MonsterTooltip();
+  readonly combatSession = new CombatSessionState();
+  private readonly launchCone: LaunchCone;
+  private onMonsterKill: ((monster: BlockMonster) => void) | null = null;
+  private onBossDefeated: (() => void) | null = null;
+  private readonly blockViews = new Map<string, BlockView>();
+  private balls: BallEntity[] = [];
+  private combatActive = false;
+  private onCombatEnd: (() => void) | null = null;
+  private launchQueue: LaunchBallUnit[] = [];
+  private launchCooldown = 0;
+  private launchConeDismissed = false;
+  private spawnState: SpawnSessionState = {
+    spawnRowOrdinal: 0,
+    bossSpawned: false,
+    specialTypeIds: [],
+  };
+  private runMonsterGroupSpecialIds: MonsterTypeId[] = [];
+  private readonly specialRuntime = new SpecialMonsterRuntime();
+  private battleClock = 0;
+  private turnSpawnAnim: TurnSpawnAnim | null = null;
+  private airdropAnim: AirDropAnim | null = null;
+  private specialTurnPlayback: SpecialTurnPlayback | null = null;
+  private readonly jumpAnims = new Map<string, JumpAnimState>();
+  private readonly birthAnims = new Map<string, MonsterBirthAnim>();
+  private spawnSlideOffsetY = 0;
+  private readonly monsterFallOffsetY = new Map<string, number>();
+  private onHunterCountChange: (() => void) | null = null;
+  private triggerScreenShake: ((sec: number, mag: number) => void) | null = null;
+  private arrowRainPlayback: {
+    strikes: ArrowRainStrikePlan[];
+    nextIndex: number;
+    stagger: number;
+  } | null = null;
+  private poisonTickPlayback: {
+    instanceIds: string[];
+    nextIndex: number;
+    stagger: number;
+  } | null = null;
+  private readonly ultimateVfx = new UltimateVfxLayer();
+  private judgmentPlayback: {
+    wavesLeft: number;
+    damage: number;
+    stagger: number;
+  } | null = null;
+  private phaseBuffActive = false;
+  private frostDamageMult = 1;
+  private onUltimateDamage: ((amount: number) => void) | null = null;
+  private onUltimateCollision: (() => void) | null = null;
+  private onUltimateKill: (() => void) | null = null;
+  private ultimateChargeSuppress = 0;
+  private judgmentOnComplete: (() => void) | null = null;
+
+  constructor() {
+    super();
+    this.position.set(layout.battle.x, layout.battle.y);
+    this.launchCone = new LaunchCone(LAUNCH_X, LAUNCH_Y);
+    this.addChild(this.blockLayer);
+    this.coneLayer.addChild(this.launchCone);
+    this.addChild(this.coneLayer);
+    this.addChild(this.fxLayer);
+    this.addChild(this.skillVfx);
+    this.addChild(this.ultimateVfx);
+    this.addChild(this.ballLayer);
+    this.addChild(this.monsterTooltip);
+    this.eventMode = 'static';
+    this.hitArea = new Rectangle(0, 0, BATTLE_WIDTH, BATTLE_HEIGHT);
+    this.on('pointertap', () => this.monsterTooltip.hide());
+    this.initBattle();
+    this.showLaunchCone();
+  }
+
+  setRunMonsterGroupConfig(specialTypeIds: readonly MonsterTypeId[]) {
+    this.runMonsterGroupSpecialIds = [...specialTypeIds];
+  }
+
+  initBattle() {
+    this.grid = createEmptyGrid();
+    this.spawnState = {
+      spawnRowOrdinal: 0,
+      bossSpawned: false,
+      specialTypeIds: [...this.runMonsterGroupSpecialIds],
+    };
+    fillRowsFromSpawn(this.grid, INITIAL_SPAWN_ROWS, this.spawnState);
+    this.refreshBlocks();
+    this.initSpecialRuntimeForGrid();
+  }
+
+  private initSpecialRuntimeForGrid(): void {
+    for (const m of collectUniqueMonsters(this.grid)) {
+      if (isSpecialMonsterType(m.typeId)) {
+        this.specialRuntime.onMonsterSpawned(m.instanceId, m.typeId);
+      }
+    }
+  }
+
+  /** 回合末：敌人特殊怪行动（带动画），完成后回调撞墙列表 */
+  runSpecialMonstersEndOfTurn(
+    onComplete: (wallHits: BlockMonster[]) => void,
+  ): void {
+    const { actions, wallHits } = planAndApplySpecialMonsterTurn(
+      this.grid,
+      this.specialRuntime,
+      this.combatSession,
+      this.spawnState.spawnRowOrdinal,
+    );
+
+    this.refreshBlocks();
+    for (const m of collectUniqueMonsters(this.grid)) {
+      this.updateMonsterHp(m);
+      this.updatePoisonBadge(m.instanceId);
+    }
+
+    if (actions.length === 0) {
+      onComplete(wallHits);
+      return;
+    }
+
+    this.specialTurnPlayback = {
+      actions,
+      index: 0,
+      phase: 'line',
+      timer: 0,
+      wallHits,
+      onComplete,
+    };
+    this.beginSpecialTurnAction();
+  }
+
+  isSpecialTurnAnimating(): boolean {
+    return this.specialTurnPlayback !== null;
+  }
+
+  showLaunchCone() {
+    this.launchConeDismissed = false;
+    this.launchCone.showSweeping();
+  }
+
+  setOnMonsterKill(handler: (monster: BlockMonster) => void) {
+    this.onMonsterKill = handler;
+  }
+
+  setOnBossDefeated(handler: () => void) {
+    this.onBossDefeated = handler;
+  }
+
+  setOnHunterCountChange(handler: () => void) {
+    this.onHunterCountChange = handler;
+  }
+
+  setScreenShakeTrigger(handler: (sec: number, mag: number) => void) {
+    this.triggerScreenShake = handler;
+  }
+
+  setUltimateChargeHandlers(handlers: {
+    onDamage?: (amount: number) => void;
+    onCollision?: () => void;
+    onKill?: () => void;
+  }) {
+    this.onUltimateDamage = handlers.onDamage ?? null;
+    this.onUltimateCollision = handlers.onCollision ?? null;
+    this.onUltimateKill = handlers.onKill ?? null;
+  }
+
+  isPrepareUltimateBusy(): boolean {
+    return this.judgmentPlayback !== null;
+  }
+
+  private pushUltimateChargeSuppress() {
+    this.ultimateChargeSuppress++;
+  }
+
+  private popUltimateChargeSuppress() {
+    this.ultimateChargeSuppress = Math.max(0, this.ultimateChargeSuppress - 1);
+  }
+
+  /** 备战立刻发动末日审判（5 波），期间不计入充能 */
+  startJudgmentImmediate(attackSum: number, onComplete?: () => void) {
+    if (attackSum <= 0) {
+      onComplete?.();
+      return;
+    }
+    const waveDmg = Math.max(
+      1,
+      Math.round(attackSum * JUDGMENT_DAMAGE_RATIO),
+    );
+    this.pushUltimateChargeSuppress();
+    this.judgmentOnComplete = onComplete ?? null;
+    this.judgmentPlayback = {
+      wavesLeft: JUDGMENT_WAVES,
+      damage: waveDmg,
+      stagger: 0.05,
+    };
+    this.ultimateVfx.startMeteorShower();
+  }
+
+  /** 备战发动相位空间：立刻显示特效，战斗回合发射后生效 */
+  startPreparePhaseBuff() {
+    this.ultimateVfx.startPhaseSpace();
+  }
+
+  /** 备战发动冻狱：立刻全场伤害 + 暴雪与蓝罩，不计入充能 */
+  applyFrostUltimateStrike(attackSum: number) {
+    const dmg = Math.max(1, Math.round(attackSum * FROST_DAMAGE_RATIO));
+    this.pushUltimateChargeSuppress();
+    this.frostDamageMult = FROST_DAMAGE_TAKEN_MULT;
+    this.ultimateVfx.startBlizzard();
+    for (const m of collectUniqueMonsters(this.grid)) {
+      if (m.hp <= 0) continue;
+      const { x, y } = this.monsterCenter(m);
+      this.fxLayer.spawn(x, y, dmg, 'normal');
+      this.applyFrozenToMonster(m);
+      this.damageMonster(m, dmg, false);
+    }
+    this.popUltimateChargeSuppress();
+  }
+
+  configureCombatUltimates(opts: {
+    judgment: boolean;
+    attackSum: number;
+    phaseBuff: boolean;
+    frostDebuff: boolean;
+  }) {
+    this.phaseBuffActive = opts.phaseBuff;
+    if (opts.phaseBuff) {
+      this.ultimateVfx.startPhaseSpace();
+    }
+    if (opts.frostDebuff) {
+      this.frostDamageMult = FROST_DAMAGE_TAKEN_MULT;
+      this.ultimateVfx.startBlizzard();
+      for (const m of collectUniqueMonsters(this.grid)) {
+        if (m.hp > 0) {
+          const found = this.findMonsterByInstanceId(m.instanceId);
+          if (found) this.applyFrozenToMonster(found);
+        }
+      }
+    }
+  }
+
+  private applyFrozenToMonster(monster: BlockMonster): void {
+    this.specialRuntime.setFrozen(monster.instanceId, true);
+    const kind = getSpecialMonsterDef(monster.typeId)?.kind;
+    if (kind === 'copy' || kind === 'summon') {
+      this.specialRuntime.interruptChargeIfCharging(monster.instanceId, 'frost');
+    }
+    this.setFrostOverlay(monster.instanceId, true);
+    this.syncChargeSweepForInstance(monster.instanceId);
+  }
+
+  clearUltimateRoundState() {
+    this.judgmentPlayback = null;
+    this.phaseBuffActive = false;
+    this.frostDamageMult = 1;
+    this.ultimateVfx.stopPhaseSpace();
+    this.ultimateVfx.stopBlizzard();
+    this.ultimateVfx.clear();
+    for (const [id, view] of this.blockViews) {
+      this.setFrostOverlayOnView(view, this.findMonsterByInstanceId(id), false);
+    }
+  }
+
+  getHunterRainLayers(): number {
+    return this.combatSession.hunterRainLayers;
+  }
+
+  /** 导出战场怪物快照（逻辑层瞄准等） */
+  getMonsterSnapshots(): MonsterSnapshot[] {
+    return collectUniqueMonsters(this.grid).map((m) => ({
+      instanceId: m.instanceId,
+      typeId: m.typeId,
+      hp: m.hp,
+      anchorRow: m.anchorRow,
+      anchorCol: m.anchorCol,
+      footprintW: m.footprintW,
+      footprintH: m.footprintH,
+    }));
+  }
+
+  /** 首领击破：立刻结束战斗（不进入回合末刷怪） */
+  abortCombat() {
+    this.combatActive = false;
+    this.launchQueue = [];
+    this.launchCooldown = 0;
+    this.onCombatEnd = null;
+    this.launchCone.hide();
+    for (const b of this.balls) b.removeFromDisplay();
+    this.balls = [];
+    this.ballLayer.removeChildren();
+  }
+
+  /** 仅由控制区槽位 collectLaunchUnits 填入 */
+  launchBallsSequential(
+    units: LaunchBallUnit[],
+    aimAngleRad: number,
+    onEnd: () => void,
+  ) {
+    if (this.combatActive || units.length === 0) return;
+    this.launchConeDismissed = false;
+    this.launchCone.freezeAtAngle(aimAngleRad);
+    this.combatActive = true;
+    this.combatSession.reset();
+    this.onCombatEnd = onEnd;
+    this.launchQueue = [...units];
+    this.launchCooldown = 0;
+    this.spawnBallFromQueue();
+  }
+
+  update(dt: number) {
+    this.battleClock += dt;
+    this.launchCone.update(dt);
+    this.fxLayer.update(dt);
+    this.skillVfx.update(dt);
+    this.ultimateVfx.update(dt);
+    this.updateJudgmentWaves(dt);
+    this.updatePoisonTicks(dt);
+    this.updateArrowRain(dt);
+    this.updateBlockFlashes(dt);
+    this.updateBlockShakes(dt);
+    this.updateChargeSweeps(dt);
+    this.updateJumpAnims(dt);
+    this.updateBirthAnims(dt);
+    this.updateSpecialTurnPlayback(dt);
+    this.updateTurnSpawnAnim(dt);
+    this.updateAirDropAnim(dt);
+    if (!this.combatActive) return;
+
+    if (this.launchQueue.length > 0) {
+      this.launchCooldown += dt;
+      while (this.launchCooldown >= BALL_LAUNCH_INTERVAL && this.launchQueue.length > 0) {
+        this.launchCooldown -= BALL_LAUNCH_INTERVAL;
+        this.spawnBallFromQueue();
+      }
+    }
+
+    if (!this.launchConeDismissed && this.launchQueue.length === 0) {
+      this.launchCone.hideAfterLaunch();
+      this.launchConeDismissed = true;
+    }
+
+    for (const ball of [...this.balls]) {
+      if (!ball.alive) continue;
+      this.simulateBall(ball, dt);
+    }
+
+    this.purgeDeadBalls();
+
+    if (
+      this.launchQueue.length === 0 &&
+      !this.hasActiveSlotBalls() &&
+      !this.arrowRainPlayback &&
+      !this.poisonTickPlayback
+    ) {
+      this.beginEndCombatSequence();
+    }
+  }
+
+  /** 自定义碰撞：分步位移 + 圆与 AABB 分离，避免嵌入 */
+  private simulateBall(ball: BallEntity, dt: number) {
+    const speed = Math.hypot(ball.vx, ball.vy);
+    const maxStep = ball.radius * 0.45;
+    const steps = Math.max(1, Math.ceil((speed * dt) / maxStep));
+    const subDt = dt / steps;
+
+    const bounds = {
+      left: ball.radius,
+      right: BATTLE_WIDTH - ball.radius,
+      top: ball.radius,
+    };
+
+    for (let s = 0; s < steps; s++) {
+      if (!ball.alive) return;
+
+      ball.vy += BALL_GRAVITY * subDt;
+
+      if (this.isPastSpawnLine(ball)) {
+        this.purgeBall(ball);
+        return;
+      }
+
+      let nx = ball.x + ball.vx * subDt;
+      let ny = ball.y + ball.vy * subDt;
+
+      if (ny + ball.radius >= SPAWN_LINE_LOCAL_Y) {
+        ball.x = nx;
+        ball.y = SPAWN_LINE_LOCAL_Y - ball.radius;
+        this.purgeBall(ball);
+        return;
+      }
+
+      if (nx < bounds.left) {
+        nx = bounds.left;
+        ball.vx = Math.abs(ball.vx);
+        ball.x = nx;
+        ball.y = ny;
+        if (this.afterBounce(ball)) return;
+      } else if (nx > bounds.right) {
+        nx = bounds.right;
+        ball.vx = -Math.abs(ball.vx);
+        ball.x = nx;
+        ball.y = ny;
+        if (this.afterBounce(ball)) return;
+      }
+
+      if (!ball.clearedTopLine && (ball.y >= BATTLE_TOP_LINE_Y || ny >= BATTLE_TOP_LINE_Y)) {
+        ball.clearedTopLine = true;
+      }
+
+      if (ball.clearedTopLine && ny < bounds.top) {
+        ny = bounds.top;
+        ball.vy = Math.abs(ball.vy);
+        ball.x = nx;
+        ball.y = ny;
+        if (this.afterBounce(ball)) return;
+      }
+
+      for (let guard = 0; guard < 5; guard++) {
+        const blockHit = this.findDeepestBlockHit(nx, ny, ball.radius);
+        if (!blockHit) break;
+
+        const { monster, left, top, right, bottom, row, col } = blockHit;
+        const popupX = (left + right) / 2;
+        const popupY = (top + bottom) / 2;
+        const impactX = Math.max(left, Math.min(nx, right));
+        const impactY = Math.max(top, Math.min(ny, bottom));
+
+        this.applyBallHit(
+          ball,
+          monster,
+          row,
+          col,
+          popupX,
+          popupY,
+          impactX,
+          impactY,
+        );
+
+        const sep = resolveCircleAABB(nx, ny, ball.radius, ball.vx, ball.vy, left, top, right, bottom);
+        nx = sep.x;
+        ny = sep.y;
+        ball.vx = sep.vx;
+        ball.vy = sep.vy;
+        ball.x = nx;
+        ball.y = ny;
+        if (this.afterBounce(ball)) return;
+      }
+
+      ball.x = nx;
+      ball.y = ny;
+    }
+
+    if (ball.alive) ball.syncView();
+  }
+
+  private isPastSpawnLine(ball: BallEntity): boolean {
+    return ball.y + ball.radius >= SPAWN_LINE_LOCAL_Y;
+  }
+
+  private hasActiveSlotBalls(): boolean {
+    return this.balls.some((b) => b.alive);
+  }
+
+  private afterBounce(ball: BallEntity): boolean {
+    this.onUltimateCollision?.();
+    if (ball.color === 'green' && !ball.isTemporary) {
+      if (this.combatSession.tryAddHunterRainLayer(ball.isBig)) {
+        this.onHunterCountChange?.();
+      }
+    }
+    if (ball.onCollision()) {
+      this.purgeBall(ball);
+      return true;
+    }
+    if (ball.canSplit && ball.color === 'brown') {
+      if (ball.isBig) this.tryWarriorBigSplit(ball);
+      else this.tryWarriorSplit(ball);
+    }
+    return false;
+  }
+
+  private applyBallHit(
+    ball: BallEntity,
+    monster: BlockMonster,
+    row: number,
+    col: number,
+    popupX: number,
+    popupY: number,
+    impactX: number,
+    impactY: number,
+  ) {
+    if (
+      getSpecialMonsterDef(monster.typeId)?.kind === 'annihilate' &&
+      Math.random() < ANNIHILATE_DESTROY_BALL_CHANCE
+    ) {
+      this.fxLayer.spawn(popupX, popupY, 0, 'normal');
+      this.purgeBall(ball);
+      return;
+    }
+
+    const hit = rollHitDamage(
+      {
+        color: ball.color,
+        isBig: ball.isBig,
+        attack: ball.attack,
+        baseCritRate: ball.critRate,
+        baseCritMult: ball.critDamageMult,
+        monsterInstanceId: monster.instanceId,
+        monsterTypeId: monster.typeId,
+      },
+      this.combatSession,
+    );
+
+    let popupStyle: PopupStyle = 'normal';
+    if (hit.isCrit) popupStyle = 'crit';
+    if (hit.assassinAmbush) {
+      popupStyle = hit.assassinEliteAmbush ? 'assassinElite' : 'assassin';
+      this.skillVfx.spawnAssassinFlash(popupX, popupY, hit.assassinEliteAmbush);
+      this.triggerScreenShake?.(
+        hit.assassinEliteAmbush ? 0.26 : 0.2,
+        hit.assassinEliteAmbush ? 14 : 11,
+      );
+    }
+
+    this.flashMonster(monster);
+    this.fxLayer.spawn(popupX, popupY, hit.damage, popupStyle);
+    this.damageMonster(monster, hit.damage);
+
+    if (ball.color === 'purple') {
+      const stacks = this.combatSession.addWarlockPoison(
+        monster.instanceId,
+        ball.isBig,
+      );
+      this.updatePoisonBadge(monster.instanceId, stacks);
+    }
+    if (ball.color === 'blue' && rollMageArcaneProc()) {
+      this.procMageArcane(ball, impactX, impactY);
+    }
+    if (ball.color === 'pink' && rollKnightCrossProc()) {
+      this.procKnightCross(ball, row, col);
+    }
+    if (ball.color === 'navy' && rollShamanChainProc()) {
+      this.procShamanChain(ball, monster, hit.damage);
+    }
+    if (ball.color === 'orange' && rollDruidClawProc(ball.isBig)) {
+      this.procDruidClaw(ball);
+    }
+  }
+
+  private dealBallDamage(
+    ball: BallEntity,
+    monster: BlockMonster,
+    popupX: number,
+    popupY: number,
+    baseDamage: number,
+  ) {
+    const hit = rollHitDamage(
+      {
+        color: ball.color,
+        isBig: ball.isBig,
+        attack: baseDamage,
+        baseCritRate: ball.critRate,
+        baseCritMult: ball.critDamageMult,
+        monsterInstanceId: monster.instanceId,
+        monsterTypeId: monster.typeId,
+      },
+      this.combatSession,
+    );
+
+    let popupStyle: PopupStyle = hit.isCrit ? 'crit' : 'normal';
+    if (hit.assassinAmbush) {
+      popupStyle = hit.assassinEliteAmbush ? 'assassinElite' : 'assassin';
+      this.skillVfx.spawnAssassinFlash(popupX, popupY, hit.assassinEliteAmbush);
+      this.triggerScreenShake?.(
+        hit.assassinEliteAmbush ? 0.26 : 0.2,
+        hit.assassinEliteAmbush ? 14 : 11,
+      );
+    }
+
+    this.flashMonster(monster);
+    this.fxLayer.spawn(popupX, popupY, hit.damage, popupStyle);
+    this.damageMonster(monster, hit.damage);
+  }
+
+  private dealWarlockPoisonDamage(monster: BlockMonster, popupX: number, popupY: number) {
+    const base = this.combatSession.warlockPoisonTickBaseDamage(monster.instanceId);
+    if (base <= 0) return;
+
+    const hit = rollHitDamage(
+      {
+        color: 'purple',
+        isBig: false,
+        attack: base,
+        baseCritRate: this.combatSession.warlockCritRate,
+        baseCritMult: this.combatSession.warlockCritMult,
+        monsterInstanceId: monster.instanceId,
+        monsterTypeId: monster.typeId,
+      },
+      this.combatSession,
+    );
+
+    this.skillVfx.spawnPoisonBurst(popupX, popupY);
+    this.flashMonster(monster);
+    this.fxLayer.spawn(
+      popupX,
+      popupY,
+      hit.damage,
+      hit.isCrit ? 'crit' : 'normal',
+    );
+    this.damageMonster(monster, hit.damage);
+  }
+
+  private monsterCenter(monster: BlockMonster): { x: number; y: number } {
+    const { left, top, right, bottom } = getFootprintAabb(monster);
+    return { x: (left + right) / 2, y: (top + bottom) / 2 };
+  }
+
+  private procShamanChain(
+    ball: BallEntity,
+    primary: BlockMonster,
+    mainHitDamage: number,
+  ) {
+    const living = collectUniqueMonsters(this.grid).filter((m) => m.hp > 0);
+    const extras = pickLightningChainTargets(
+      living,
+      primary.instanceId,
+      3,
+    );
+    if (extras.length === 0) return;
+
+    const chainPoints = [
+      this.monsterCenter(primary),
+      ...extras.map((m) => this.monsterCenter(m)),
+    ];
+    this.skillVfx.spawnLightningChain(chainPoints);
+
+    const chainBase = shamanChainBaseDamage(mainHitDamage);
+    for (const target of extras) {
+      const { x, y } = this.monsterCenter(target);
+      this.dealBallDamage(ball, target, x, y, chainBase);
+    }
+  }
+
+  private findNearestMonsterToWall(): BlockMonster | null {
+    const living = collectUniqueMonsters(this.grid).filter((m) => m.hp > 0);
+    if (living.length === 0) return null;
+    return living.reduce((best, m) => {
+      if (m.anchorRow < best.anchorRow) return m;
+      if (m.anchorRow > best.anchorRow) return best;
+      return m.anchorCol < best.anchorCol ? m : best;
+    });
+  }
+
+  private procDruidClaw(ball: BallEntity) {
+    const target = this.findNearestMonsterToWall();
+    if (!target) return;
+
+    const { x, y } = this.monsterCenter(target);
+    this.skillVfx.spawnDruidClaw(x, y);
+    const base = Math.max(
+      1,
+      Math.round(this.combatSession.druidSmallAttack * DRUID_CLAW_DAMAGE_RATIO),
+    );
+    this.dealBallDamage(ball, target, x, y, base);
+  }
+
+  private damageMonster(
+    monster: BlockMonster,
+    damage: number,
+    reportUltimate = true,
+    interruptCharge = false,
+  ) {
+    if (interruptCharge) {
+      this.specialRuntime.interruptChargeIfCharging(monster.instanceId, 'judgment');
+      this.syncChargeSweepForInstance(monster.instanceId);
+    }
+    const cap = this.specialRuntime.invincibleDamageCap(monster.instanceId);
+    let base = damage;
+    if (cap !== null) base = Math.min(base, cap);
+    const final = Math.max(1, Math.round(base * this.frostDamageMult));
+    if (reportUltimate && this.ultimateChargeSuppress === 0) {
+      this.onUltimateDamage?.(final);
+    }
+    if (damageBlock(monster, final)) {
+      this.handleMonsterDestroyed(monster);
+    } else {
+      this.updateMonsterHp(monster);
+    }
+  }
+
+  /** 魔爆以球体与砖块的碰撞点为圆心（非砖块中心） */
+  private procMageArcane(ball: BallEntity, impactX: number, impactY: number) {
+    const dmg = mageArcaneDamage(ball.attack);
+    const radius = getMageArcaneRadius(ball.isBig);
+    this.skillVfx.spawnArcaneExplosion(impactX, impactY, radius);
+    for (const m of this.collectMonstersInRadius(impactX, impactY, radius)) {
+      const { x, y } = this.monsterCenter(m);
+      this.dealBallDamage(ball, m, x, y, dmg);
+    }
+  }
+
+  private procKnightCross(ball: BallEntity, row: number, col: number) {
+    const dmg = knightCrossDamage(ball.attack, ball.isBig);
+    this.skillVfx.spawnKnightCross(row, col, ball.isBig);
+    for (const m of this.collectMonstersOnCross(row, col)) {
+      const { x, y } = this.monsterCenter(m);
+      this.dealBallDamage(ball, m, x, y, dmg);
+    }
+  }
+
+  private collectMonstersInRadius(cx: number, cy: number, r: number) {
+    const r2 = r * r;
+    const seen = new Set<string>();
+    const list: BlockMonster[] = [];
+    for (const m of collectUniqueMonsters(this.grid)) {
+      if (seen.has(m.instanceId)) continue;
+      const { left, top, right, bottom } = getFootprintAabb(m);
+      const mx = (left + right) / 2;
+      const my = (top + bottom) / 2;
+      if ((mx - cx) ** 2 + (my - cy) ** 2 <= r2) {
+        seen.add(m.instanceId);
+        list.push(m);
+      }
+    }
+    return list;
+  }
+
+  private collectMonstersOnCross(row: number, col: number) {
+    const seen = new Set<string>();
+    const list: BlockMonster[] = [];
+    for (let r = 0; r < BLOCK_ROWS; r++) {
+      for (let c = 0; c < BLOCK_COLS; c++) {
+        if (r !== row && c !== col) continue;
+        const m = this.grid[r]![c];
+        if (!m || seen.has(m.instanceId)) continue;
+        seen.add(m.instanceId);
+        list.push(m);
+      }
+    }
+    return list;
+  }
+
+  private tryWarriorBigSplit(parent: BallEntity) {
+    if (!parent.canSplit || !parent.alive) return;
+    if (Math.random() >= WARRIOR_BIG_SPLIT_CHANCE) return;
+    const speed = Math.hypot(parent.vx, parent.vy);
+    if (speed < 1) return;
+    const baseAngle = Math.atan2(parent.vy, parent.vx);
+    const spreadRad = (WARRIOR_SPLIT_ANGLE_SPREAD_DEG * Math.PI) / 180;
+    const childRadius = getBattleBallRadius(false);
+    const remaining = Math.max(0, parent.maxBounces - parent.bounces);
+
+    for (let i = 0; i < WARRIOR_BIG_SPLIT_COUNT; i++) {
+      const offset = (Math.random() * 2 - 1) * spreadRad;
+      const angle = baseAngle + offset;
+      const child = new BallEntity(
+        parent.color,
+        false,
+        parent.x,
+        parent.y,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        parent.attack,
+        remaining,
+        parent.critRate,
+        parent.critDamageMult,
+        {
+          radius: childRadius,
+          isTemporary: true,
+          clearedTopLine: true,
+          canSplit: false,
+        },
+      );
+      this.balls.push(child);
+      this.ballLayer.addChild(child.view);
+    }
+  }
+
+  private tryWarriorSplit(parent: BallEntity) {
+    if (!parent.canSplit || !parent.alive) return;
+    if (Math.random() >= WARRIOR_SPLIT_CHANCE) return;
+    const speed = Math.hypot(parent.vx, parent.vy);
+    if (speed < 1) return;
+    const baseAngle = Math.atan2(parent.vy, parent.vx);
+    const spreadRad = (WARRIOR_SPLIT_ANGLE_SPREAD_DEG * Math.PI) / 180;
+    const childRadius = Math.max(5, parent.radius * WARRIOR_SPLIT_SIZE_RATIO);
+    const childAttack = Math.max(1, Math.round(parent.attack * WARRIOR_SPLIT_ATTACK_RATIO));
+    const remaining = Math.max(0, parent.maxBounces - parent.bounces);
+    const childMaxBounces = Math.max(1, Math.floor(remaining * WARRIOR_SPLIT_BOUNCES_RATIO));
+
+    for (let i = 0; i < WARRIOR_SPLIT_COUNT; i++) {
+      const offset = (Math.random() * 2 - 1) * spreadRad;
+      const angle = baseAngle + offset;
+      const child = new BallEntity(
+        parent.color,
+        parent.isBig,
+        parent.x,
+        parent.y,
+        Math.cos(angle) * speed,
+        Math.sin(angle) * speed,
+        childAttack,
+        childMaxBounces,
+        parent.critRate,
+        parent.critDamageMult,
+        {
+          radius: childRadius,
+          isTemporary: true,
+          clearedTopLine: true,
+        },
+      );
+      this.balls.push(child);
+      this.ballLayer.addChild(child.view);
+    }
+  }
+
+  private beginEndCombatSequence() {
+    if (this.shouldResolvePoisonTicks()) {
+      this.beginPoisonTickSequence();
+      return;
+    }
+    this.beginHunterArrowRainOrFinish();
+  }
+
+  private shouldResolvePoisonTicks(): boolean {
+    if (!this.combatSession.hasPoisonToResolve()) return false;
+    return collectUniqueMonsters(this.grid).some(
+      (m) =>
+        m.hp > 0 && this.combatSession.getWarlockPoisonStacks(m.instanceId) > 0,
+    );
+  }
+
+  private beginPoisonTickSequence() {
+    const instanceIds = collectUniqueMonsters(this.grid)
+      .filter(
+        (m) =>
+          m.hp > 0 && this.combatSession.getWarlockPoisonStacks(m.instanceId) > 0,
+      )
+      .map((m) => m.instanceId);
+
+    if (instanceIds.length === 0) {
+      this.beginHunterArrowRainOrFinish();
+      return;
+    }
+
+    this.poisonTickPlayback = { instanceIds, nextIndex: 0, stagger: 0 };
+    this.launchNextPoisonTick();
+  }
+
+  private launchNextPoisonTick() {
+    if (this.abortPoisonIfAllDead()) return;
+
+    const pb = this.poisonTickPlayback;
+    if (!pb || pb.nextIndex >= pb.instanceIds.length) {
+      this.poisonTickPlayback = null;
+      this.beginHunterArrowRainOrFinish();
+      return;
+    }
+
+    const id = pb.instanceIds[pb.nextIndex]!;
+    pb.nextIndex++;
+    const monster = this.findMonsterByInstanceId(id);
+    if (monster && monster.hp > 0) {
+      const { x, y } = this.monsterCenter(monster);
+      this.dealWarlockPoisonDamage(monster, x, y);
+    }
+    if (this.abortPoisonIfAllDead()) return;
+    pb.stagger = POISON_TICK_STAGGER_SEC;
+  }
+
+  private abortPoisonIfAllDead(): boolean {
+    if (this.hasLivingMonsters()) return false;
+    this.poisonTickPlayback = null;
+    this.arrowRainPlayback = null;
+    this.skillVfx.cancelFlyingArrow();
+    this.finishCombat();
+    return true;
+  }
+
+  private updatePoisonTicks(dt: number) {
+    const pb = this.poisonTickPlayback;
+    if (!pb) return;
+
+    if (this.abortPoisonIfAllDead()) return;
+
+    pb.stagger -= dt;
+    if (pb.stagger > 0) return;
+
+    if (pb.nextIndex >= pb.instanceIds.length) {
+      this.poisonTickPlayback = null;
+      this.beginHunterArrowRainOrFinish();
+      return;
+    }
+
+    this.launchNextPoisonTick();
+  }
+
+  private beginHunterArrowRainOrFinish() {
+    const shots = this.combatSession.getArrowRainCount();
+    if (shots <= 0) {
+      this.finishCombat();
+      return;
+    }
+
+    const monsters = collectUniqueMonsters(this.grid);
+    if (monsters.length === 0) {
+      this.finishCombat();
+      return;
+    }
+
+    const rainTargets = monsters.map((m) => {
+      const { left, top, right, bottom } = getFootprintAabb(m);
+      return {
+        instanceId: m.instanceId,
+        hp: m.hp,
+        centerX: (left + right) / 2,
+        centerY: (top + bottom) / 2,
+      };
+    });
+
+    const strikes = planArrowRain(
+      rainTargets,
+      shots,
+      this.combatSession.hunterArrowDamage,
+    );
+
+    if (strikes.length === 0) {
+      this.finishCombat();
+      return;
+    }
+
+    this.arrowRainPlayback = { strikes, nextIndex: 0, stagger: 0 };
+    this.launchNextArrowRainStrike();
+  }
+
+  private hasLivingMonsters(): boolean {
+    return collectUniqueMonsters(this.grid).some((m) => m.hp > 0);
+  }
+
+  /** 场上已无存活敌人时立刻结束箭雨 */
+  private abortArrowRainIfAllDead(): boolean {
+    if (this.hasLivingMonsters()) return false;
+    this.skillVfx.cancelFlyingArrow();
+    this.arrowRainPlayback = null;
+    this.finishCombat();
+    return true;
+  }
+
+  private launchNextArrowRainStrike() {
+    if (this.abortArrowRainIfAllDead()) return;
+
+    const pb = this.arrowRainPlayback;
+    if (!pb || pb.nextIndex >= pb.strikes.length) return;
+
+    const strike = pb.strikes[pb.nextIndex]!;
+    pb.nextIndex++;
+
+    const fromY = battleGridRowTopY(0);
+    const spread = (Math.random() - 0.5) * 80;
+    this.skillVfx.spawnArrowFall(
+      strike.targetX + spread,
+      fromY,
+      strike.targetX,
+      strike.targetY,
+    );
+  }
+
+  private updateArrowRain(dt: number) {
+    const pb = this.arrowRainPlayback;
+    if (!pb) return;
+
+    if (this.abortArrowRainIfAllDead()) return;
+
+    if (this.skillVfx.isArrowFlying()) {
+      if (this.skillVfx.updateArrowFall(dt)) {
+        if (!this.abortArrowRainIfAllDead()) {
+          this.applyArrowRainStrike(pb.strikes[pb.nextIndex - 1]!);
+          if (this.abortArrowRainIfAllDead()) return;
+          pb.stagger = ARROW_STAGGER_SEC;
+        }
+      }
+      return;
+    }
+
+    if (pb.nextIndex >= pb.strikes.length) {
+      this.arrowRainPlayback = null;
+      this.finishCombat();
+      return;
+    }
+
+    pb.stagger -= dt;
+    if (pb.stagger > 0) return;
+
+    this.launchNextArrowRainStrike();
+  }
+
+  private applyArrowRainStrike(strike: ArrowRainStrikePlan) {
+    const { targetX, targetY, damage, instanceId } = strike;
+    const monster = this.findMonsterByInstanceId(instanceId);
+
+    if (monster && monster.hp > 0) {
+      this.fxLayer.spawn(targetX, targetY, damage, 'normal');
+      this.damageMonster(monster, damage);
+    }
+  }
+
+  private findMonsterByInstanceId(id: string): BlockMonster | null {
+    for (const m of collectUniqueMonsters(this.grid)) {
+      if (m.instanceId === id) return m;
+    }
+    return null;
+  }
+
+  private handleMonsterDestroyed(monster: BlockMonster) {
+    this.combatSession.clearWarlockPoison(monster.instanceId);
+    this.specialRuntime.remove(monster.instanceId);
+    killMonsterOnGrid(this.grid, monster);
+    this.removeMonsterView(monster);
+
+    if (monster.typeId === 'boss') {
+      this.onBossDefeated?.();
+      this.abortCombat();
+      return;
+    }
+
+    this.onMonsterKill?.(monster);
+    if (this.ultimateChargeSuppress === 0) this.onUltimateKill?.();
+  }
+
+  private finishJudgmentPlayback() {
+    this.judgmentPlayback = null;
+    this.popUltimateChargeSuppress();
+    const done = this.judgmentOnComplete;
+    this.judgmentOnComplete = null;
+    done?.();
+  }
+
+  private updateJudgmentWaves(dt: number) {
+    const jb = this.judgmentPlayback;
+    if (!jb) return;
+
+    jb.stagger -= dt;
+    if (jb.stagger > 0) return;
+
+    if (jb.wavesLeft <= 0) {
+      this.finishJudgmentPlayback();
+      return;
+    }
+
+    jb.wavesLeft--;
+    jb.stagger = 0.28;
+
+    for (const m of collectUniqueMonsters(this.grid)) {
+      if (m.hp <= 0) continue;
+      const { x, y } = this.monsterCenter(m);
+      this.fxLayer.spawn(x, y, jb.damage, 'normal');
+      this.damageMonster(m, jb.damage, false, true);
+    }
+    this.triggerScreenShake?.(0.22, 12);
+  }
+
+  isBossSpawned(): boolean {
+    return this.spawnState.bossSpawned;
+  }
+
+  /** 空降波：不推进，按扫描顺序依次从高空落下 */
+  startAirDropAnim(
+    variant: AirDropVariant,
+    onComplete: (wallHits: BlockMonster[]) => void,
+  ) {
+    const growthStep = getMonsterGrowthStep(this.spawnState.spawnRowOrdinal);
+    const result = applyAirDrop(this.grid, variant, growthStep);
+    this.grid = result.grid;
+    this.monsterFallOffsetY.clear();
+
+    const sorted = this.sortAirdropPlaced(result.placed);
+    const fallQueue = sorted.map((m) => m.instanceId);
+
+    for (const id of fallQueue) {
+      this.monsterFallOffsetY.set(id, -AIRDROP_FALL_START_OFFSET);
+    }
+    this.refreshBlocks();
+    for (const id of fallQueue) {
+      const view = this.blockViews.get(id);
+      if (view) view.root.alpha = 0;
+    }
+    this.syncBlockSlideOffset();
+
+    this.airdropAnim = {
+      fallQueue,
+      nextRelease: 0,
+      activeFalls: new Map(),
+      staggerTimer: 0,
+      onComplete,
+    };
+  }
+
+  /** 随机：左→右或右→左，均从上到下 */
+  private sortAirdropPlaced(placed: BlockMonster[]): BlockMonster[] {
+    const ltr = Math.random() < 0.5;
+    return [...placed].sort((a, b) => {
+      if (a.anchorRow !== b.anchorRow) return a.anchorRow - b.anchorRow;
+      return ltr ? a.anchorCol - b.anchorCol : b.anchorCol - a.anchorCol;
+    });
+  }
+
+  /** 从底线逐行推进刷怪，动画结束后回调（含撞墙砖列表） */
+  startTurnSpawnAnim(onComplete: (wallHits: BlockMonster[]) => void) {
+    const rowCount = resolveTurnSpawnRowCount(this.grid);
+    if (rowCount <= 0) {
+      onComplete([]);
+      return;
+    }
+    this.turnSpawnAnim = {
+      stepsLeft: rowCount,
+      stepTime: 0,
+      wallHits: [],
+      onComplete,
+    };
+    this.beginTurnSpawnStep();
+  }
+
+  isTurnSpawnAnimating(): boolean {
+    return (
+      this.turnSpawnAnim !== null ||
+      this.airdropAnim !== null ||
+      this.specialTurnPlayback !== null
+    );
+  }
+
+  private beginTurnSpawnStep() {
+    const result = pushGridOneRow(this.grid, { ...this.spawnState });
+    this.grid = result.grid;
+    this.spawnState.spawnRowOrdinal = result.spawnRowOrdinal;
+    this.spawnState.bossSpawned = result.bossSpawned;
+    for (const hit of result.wallHits) {
+      const { x, y } = this.monsterCenter(hit);
+      this.playWallDetonateExplosion(x, y);
+    }
+    this.turnSpawnAnim!.wallHits.push(...result.wallHits);
+    this.refreshBlocks();
+    this.spawnSlideOffsetY = MONSTER_SIZE;
+    this.turnSpawnAnim!.stepTime = 0;
+    this.syncBlockSlideOffset();
+  }
+
+  private updateTurnSpawnAnim(dt: number) {
+    const anim = this.turnSpawnAnim;
+    if (!anim) return;
+
+    anim.stepTime += dt;
+    const t = Math.min(1, anim.stepTime / ROW_SPAWN_ANIM_STEP_SEC);
+    const eased = 1 - (1 - t) ** 3;
+    this.spawnSlideOffsetY = (1 - eased) * MONSTER_SIZE;
+    this.syncBlockSlideOffset();
+
+    if (t < 1) return;
+
+    anim.stepsLeft--;
+    if (anim.stepsLeft > 0) {
+      this.beginTurnSpawnStep();
+      return;
+    }
+
+    this.spawnSlideOffsetY = 0;
+    this.syncBlockSlideOffset();
+    const hits = anim.wallHits;
+    const done = anim.onComplete;
+    this.turnSpawnAnim = null;
+    done(hits);
+  }
+
+  private syncBlockSlideOffset() {
+    for (const [id, view] of this.blockViews) {
+      const extra =
+        this.monsterFallOffsetY.get(id) ?? this.spawnSlideOffsetY;
+      view.root.y = battleGridRowTopY(view.anchorRow) + extra;
+    }
+  }
+
+  private updateAirDropAnim(dt: number) {
+    const anim = this.airdropAnim;
+    if (!anim) return;
+
+    anim.staggerTimer += dt;
+    while (
+      anim.nextRelease < anim.fallQueue.length &&
+      anim.staggerTimer >= AIRDROP_STAGGER_SEC
+    ) {
+      anim.staggerTimer -= AIRDROP_STAGGER_SEC;
+      const id = anim.fallQueue[anim.nextRelease]!;
+      anim.nextRelease++;
+      anim.activeFalls.set(id, { age: 0 });
+      const view = this.blockViews.get(id);
+      if (view) view.root.alpha = 1;
+    }
+
+    const finished: string[] = [];
+    for (const [id, fall] of anim.activeFalls) {
+      fall.age += dt;
+      const t = Math.min(1, fall.age / AIRDROP_FALL_DURATION_SEC);
+      const eased = 1 - (1 - t) ** 3;
+      this.monsterFallOffsetY.set(
+        id,
+        -AIRDROP_FALL_START_OFFSET * (1 - eased),
+      );
+      if (t >= 1) finished.push(id);
+    }
+
+    for (const id of finished) {
+      anim.activeFalls.delete(id);
+      this.monsterFallOffsetY.delete(id);
+    }
+    this.syncBlockSlideOffset();
+
+    const allReleased = anim.nextRelease >= anim.fallQueue.length;
+    if (allReleased && anim.activeFalls.size === 0) {
+      const done = anim.onComplete;
+      this.airdropAnim = null;
+      done([]);
+    }
+  }
+
+  private spawnBallFromQueue() {
+    const unit = this.launchQueue.shift();
+    if (!unit) return;
+
+    const stats = getBallCombatStats(unit.color, unit.isBig);
+    const angle = this.launchCone.randomLaunchAngle();
+    const speed = stats.speed;
+    const vx = Math.cos(angle) * speed;
+    const vy = Math.sin(angle) * speed;
+
+    let maxBounces = stats.maxBounces;
+    let critRate = stats.critRate;
+    let speedMult = 1;
+    if (this.phaseBuffActive) {
+      maxBounces += PHASE_EXTRA_BOUNCES;
+      critRate = Math.min(1, critRate + PHASE_CRIT_BONUS);
+      speedMult = PHASE_SPEED_MULT;
+    }
+
+    const ball = new BallEntity(
+      unit.color,
+      unit.isBig,
+      LAUNCH_X,
+      LAUNCH_Y,
+      vx * speedMult,
+      vy * speedMult,
+      stats.attack,
+      maxBounces,
+      critRate,
+      CRIT_DAMAGE_MULTIPLIER,
+    );
+    const smallStats = getBallCombatStats(unit.color, false);
+    if (unit.color === 'green') {
+      this.combatSession.registerHunterBall(smallStats.attack);
+    }
+    if (unit.color === 'purple') {
+      this.combatSession.registerWarlockBall(smallStats.attack, smallStats.critRate);
+    }
+    if (unit.color === 'orange') {
+      this.combatSession.registerDruidBall(smallStats.attack, smallStats.critRate);
+    }
+
+    this.balls.push(ball);
+    this.ballLayer.addChild(ball.view);
+  }
+
+  private findDeepestBlockHit(cx: number, cy: number, r: number) {
+    let best: {
+      monster: BlockMonster;
+      left: number;
+      top: number;
+      right: number;
+      bottom: number;
+      row: number;
+      col: number;
+      depth: number;
+    } | null = null;
+
+    for (const monster of collectUniqueMonsters(this.grid)) {
+      const { left, top, right, bottom } = getFootprintAabb(monster);
+      const sep = resolveCircleAABB(cx, cy, r, 0, 0, left, top, right, bottom);
+      if (!sep.hit) continue;
+      const depth = Math.hypot(cx - sep.x, cy - sep.y);
+      if (!best || depth > best.depth) {
+        const mx = (left + right) / 2;
+        const my = (top + bottom) / 2;
+        const row = Math.min(
+          BLOCK_ROWS - 1,
+          Math.max(
+            0,
+            Math.floor((my - battleGridRowTopY(0)) / MONSTER_SIZE),
+          ),
+        );
+        const col = Math.min(
+          BLOCK_COLS - 1,
+          Math.max(0, Math.floor(mx / MONSTER_SIZE)),
+        );
+        best = { monster, left, top, right, bottom, row, col, depth };
+      }
+    }
+    return best;
+  }
+
+  private purgeBall(ball: BallEntity) {
+    const i = this.balls.indexOf(ball);
+    if (i >= 0) this.balls.splice(i, 1);
+    ball.removeFromDisplay();
+  }
+
+  private purgeDeadBalls() {
+    for (let i = this.balls.length - 1; i >= 0; i--) {
+      const ball = this.balls[i]!;
+      if (!ball.alive) {
+        ball.removeFromDisplay();
+        this.balls.splice(i, 1);
+      }
+    }
+  }
+
+  private finishCombat() {
+    this.combatActive = false;
+    this.arrowRainPlayback = null;
+    this.poisonTickPlayback = null;
+    this.clearUltimateRoundState();
+    this.combatSession.reset();
+    this.onHunterCountChange?.();
+    this.launchQueue = [];
+    this.launchCooldown = 0;
+    this.launchConeDismissed = false;
+    this.launchCone.hide();
+    for (const b of this.balls) b.removeFromDisplay();
+    this.balls = [];
+    this.ballLayer.removeChildren();
+    this.onCombatEnd?.();
+    this.onCombatEnd = null;
+  }
+
+  private refreshBlocks() {
+    this.monsterTooltip.hide();
+    for (const [, v] of this.blockViews) v.root.destroy();
+    this.blockViews.clear();
+    this.blockLayer.removeChildren();
+
+    for (let r = 0; r < BLOCK_ROWS; r++) {
+      for (let c = 0; c < BLOCK_COLS; c++) {
+        const m = this.grid[r]![c];
+        if (m && isAnchorCell(m, r, c)) this.createBlockView(m);
+      }
+    }
+  }
+
+  private createBlockView(m: BlockMonster) {
+    const typeRow = getMonsterType(m.typeId);
+    const root = new Container();
+    root.position.set(
+      m.anchorCol * MONSTER_SIZE,
+      battleGridRowTopY(m.anchorRow),
+    );
+
+    const w = m.footprintW * MONSTER_SIZE;
+    const h = m.footprintH * MONSTER_SIZE;
+    const strokeW = m.typeId === 'boss' ? 3 : 2;
+
+    root.eventMode = 'static';
+    root.cursor = 'help';
+    root.hitArea = new Rectangle(0, 0, w, h);
+    root.on('pointertap', (e) => {
+      e.stopPropagation();
+      const tip = getMonsterTip(m.typeId);
+      const extra =
+        this.monsterFallOffsetY.get(m.instanceId) ?? this.spawnSlideOffsetY;
+      this.monsterTooltip.toggle(
+        tip,
+        m.instanceId,
+        root.x + w / 2,
+        root.y + h / 2 + extra,
+        h,
+      );
+    });
+
+    const shakeBody = new Container();
+    root.addChild(shakeBody);
+
+    const g = new Graphics();
+    drawMonsterBlock(
+      g,
+      w,
+      h,
+      m.typeId,
+      typeRow.fillColor,
+      typeRow.strokeColor,
+      strokeW,
+    );
+    shakeBody.addChild(g);
+
+    const flashOverlay = new Graphics();
+    const pad = 2;
+    flashOverlay.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
+    flashOverlay.fill({ color: 0xffffff, alpha: 0.92 });
+    flashOverlay.visible = false;
+    shakeBody.addChild(flashOverlay);
+
+    const fontSize =
+      m.typeId === 'boss'
+        ? 28
+        : m.typeId === 'elite'
+          ? 24
+          : m.typeId === 'airdrop_blue' || m.typeId === 'airdrop_red'
+            ? 20
+            : 22;
+    const hpText = new Text({
+      text: String(m.hp),
+      style: {
+        fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+        fontSize,
+        fill: getMonsterHpTextFill(m.typeId),
+        fontWeight: 'bold',
+      },
+    });
+    hpText.anchor.set(0.5);
+    hpText.position.set(w / 2, h / 2);
+    shakeBody.addChild(hpText);
+
+    this.blockLayer.addChild(root);
+    const view: BlockView = {
+      root,
+      shakeBody,
+      hpText,
+      flashOverlay,
+      frostOverlay: null,
+      chargeSweepOverlay: null,
+      chargeSweepPhase: 0,
+      poisonBadgeBg: null,
+      poisonBadgeText: null,
+      flashTime: 0,
+      shake: createShakeState(),
+      anchorRow: m.anchorRow,
+      anchorCol: m.anchorCol,
+    };
+    this.blockViews.set(m.instanceId, view);
+    if (isSpecialMonsterType(m.typeId)) {
+      this.specialRuntime.onMonsterSpawned(m.instanceId, m.typeId);
+    }
+    this.updatePoisonBadge(m.instanceId);
+    this.syncChargeSweepForInstance(m.instanceId);
+    root.y =
+      battleGridRowTopY(m.anchorRow) +
+      (this.monsterFallOffsetY.get(m.instanceId) ?? this.spawnSlideOffsetY);
+  }
+
+  private setFrostOverlay(instanceId: string, on: boolean) {
+    const view = this.blockViews.get(instanceId);
+    const monster = this.findMonsterByInstanceId(instanceId);
+    if (!view) return;
+    this.setFrostOverlayOnView(view, monster, on);
+  }
+
+  private setFrostOverlayOnView(
+    view: BlockView,
+    monster: BlockMonster | null,
+    on: boolean,
+  ) {
+    if (!on) {
+      view.frostOverlay?.destroy();
+      view.frostOverlay = null;
+      return;
+    }
+
+    if (!monster || view.frostOverlay) return;
+    const w = monster.footprintW * MONSTER_SIZE;
+    const h = monster.footprintH * MONSTER_SIZE;
+    const pad = 2;
+    const overlay = new Graphics();
+    overlay.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
+    overlay.fill({ color: 0x4488ff, alpha: 0.38 });
+    overlay.stroke({ width: 2, color: 0xaaeeff, alpha: 0.65 });
+    view.shakeBody.addChild(overlay);
+    view.frostOverlay = overlay;
+  }
+
+  private updatePoisonBadge(instanceId: string, stacksOverride?: number) {
+    const view = this.blockViews.get(instanceId);
+    const monster = this.findMonsterByInstanceId(instanceId);
+    if (!view || !monster) return;
+
+    const stacks =
+      stacksOverride ?? this.combatSession.getWarlockPoisonStacks(instanceId);
+    const w = monster.footprintW * MONSTER_SIZE;
+
+    if (stacks <= 0) {
+      view.poisonBadgeBg?.destroy();
+      view.poisonBadgeText?.destroy();
+      view.poisonBadgeBg = null;
+      view.poisonBadgeText = null;
+      return;
+    }
+
+    if (!view.poisonBadgeBg || !view.poisonBadgeText) {
+      const bg = new Graphics();
+      const label = new Text({
+        text: '',
+        style: {
+          fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+          fontSize: 13,
+          fill: 0xffffff,
+          fontWeight: 'bold',
+          stroke: { color: 0x000000, width: 1, join: 'round' },
+        },
+      });
+      label.anchor.set(0.5);
+      label.position.set(w - 10, 10);
+      bg.position.set(w - 10, 10);
+      view.shakeBody.addChild(bg, label);
+      view.poisonBadgeBg = bg;
+      view.poisonBadgeText = label;
+    }
+
+    const r = 11;
+    view.poisonBadgeBg.clear();
+    view.poisonBadgeBg.circle(0, 0, r);
+    view.poisonBadgeBg.fill({ color: 0x9b59b6, alpha: 0.95 });
+    view.poisonBadgeBg.stroke({ width: 1.5, color: 0xda70d6, alpha: 0.95 });
+    view.poisonBadgeText.text = stacks > 99 ? '99+' : String(stacks);
+  }
+
+  private flashMonster(monster: BlockMonster) {
+    const view = this.blockViews.get(monster.instanceId);
+    if (!view) return;
+    view.flashTime = BLOCK_HIT_FLASH_DURATION;
+    view.flashOverlay.visible = true;
+    view.flashOverlay.alpha = 1;
+    extendHitShake(view.shake, this.battleClock);
+  }
+
+  private updateBlockFlashes(dt: number) {
+    for (const view of this.blockViews.values()) {
+      if (view.flashTime <= 0) continue;
+      view.flashTime -= dt;
+      if (view.flashTime <= 0) {
+        view.flashOverlay.visible = false;
+        continue;
+      }
+      view.flashOverlay.alpha = view.flashTime / BLOCK_HIT_FLASH_DURATION;
+    }
+  }
+
+  private updateBlockShakes(dt: number) {
+    const now = this.battleClock;
+    for (const view of this.blockViews.values()) {
+      updateMonsterShake(view.shake, view.shakeBody, now, dt);
+    }
+  }
+
+  private updateMonsterHp(monster: BlockMonster) {
+    const view = this.blockViews.get(monster.instanceId);
+    if (view) view.hpText.text = String(monster.hp);
+  }
+
+  private removeMonsterView(monster: BlockMonster) {
+    const view = this.blockViews.get(monster.instanceId);
+    view?.root.destroy();
+    this.blockViews.delete(monster.instanceId);
+  }
+
+  private syncChargeSweepForInstance(instanceId: string): void {
+    const view = this.blockViews.get(instanceId);
+    const monster = this.findMonsterByInstanceId(instanceId);
+    if (!view || !monster) return;
+
+    const charging = this.specialRuntime.isCharging(instanceId);
+    if (!charging) {
+      view.chargeSweepOverlay?.destroy();
+      view.chargeSweepOverlay = null;
+      return;
+    }
+
+    if (view.chargeSweepOverlay) return;
+
+    const w = monster.footprintW * MONSTER_SIZE;
+    const h = monster.footprintH * MONSTER_SIZE;
+    const pad = 2;
+    const sweep = new Graphics();
+    sweep.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
+    sweep.fill({ color: 0xffffff, alpha: 0.35 });
+    view.shakeBody.addChild(sweep);
+    view.chargeSweepOverlay = sweep;
+    view.chargeSweepPhase = 0;
+  }
+
+  private playWallDetonateExplosion(x: number, y: number, scale = 1): void {
+    this.skillVfx.spawnWallDetonateExplosion(x, y, scale);
+    this.triggerScreenShake?.(0.38, 18 * scale);
+  }
+
+  private beginSpecialTurnAction(): void {
+    const pb = this.specialTurnPlayback;
+    if (!pb) return;
+
+    const action = pb.actions[pb.index];
+    if (!action) {
+      this.finishSpecialTurnPlayback();
+      return;
+    }
+
+    if (action.kind === 'charge') {
+      this.syncChargeSweepForInstance(action.sourceId);
+      this.advanceSpecialTurnAction();
+      return;
+    }
+
+    if (action.kind === 'heal') {
+      for (const t of action.targets) {
+        this.skillVfx.spawnColorLine(
+          action.fromX,
+          action.fromY,
+          t.x,
+          t.y,
+          action.color,
+        );
+      }
+    } else if (action.kind === 'jump') {
+      if (!action.detonate) {
+        this.skillVfx.spawnColorLine(
+          action.fromX,
+          action.fromY,
+          action.toX,
+          action.toY,
+          action.color,
+        );
+      }
+    } else if (action.kind === 'spawn') {
+      this.skillVfx.spawnColorLine(
+        action.fromX,
+        action.fromY,
+        action.toX,
+        action.toY,
+        action.color,
+      );
+    }
+
+    pb.phase = 'line';
+    pb.timer = action.kind === 'jump' && action.detonate ? 0 : SPECIAL_LINE_SEC;
+    if (pb.timer <= 0) this.onSpecialTurnLineDone();
+  }
+
+  private onSpecialTurnLineDone(): void {
+    const pb = this.specialTurnPlayback;
+    if (!pb) return;
+
+    const action = pb.actions[pb.index]!;
+    pb.phase = 'effect';
+
+    if (action.kind === 'heal') {
+      for (const t of action.targets) {
+        this.fxLayer.spawn(t.x, t.y, t.amount, 'heal');
+        const m = this.findMonsterByInstanceId(t.instanceId);
+        if (m) this.updateMonsterHp(m);
+      }
+      pb.phase = 'wait';
+      pb.timer = MONSTER_BIRTH_DURATION * 0.65;
+      return;
+    }
+
+    if (action.kind === 'jump') {
+      if (action.detonate) {
+        this.playWallDetonateExplosion(action.fromX, action.fromY);
+        pb.phase = 'wait';
+        pb.timer = 0.45;
+        return;
+      }
+      this.startJumpAnim(action);
+      pb.phase = 'wait';
+      pb.timer = SPECIAL_JUMP_SEC;
+      return;
+    }
+
+    if (action.kind === 'spawn') {
+      this.startSpawnBirthAnim(action.spawnedId);
+      pb.phase = 'wait';
+      pb.timer = MONSTER_BIRTH_DURATION;
+    }
+  }
+
+  private startJumpAnim(
+    action: Extract<SpecialEnemyAction, { kind: 'jump' }>,
+  ): void {
+    const view = this.blockViews.get(action.sourceId);
+    if (!view) return;
+
+    const extra =
+      this.monsterFallOffsetY.get(action.sourceId) ?? this.spawnSlideOffsetY;
+    const fromY = battleGridRowTopY(action.fromRow) + extra;
+    const toY = battleGridRowTopY(action.toRow) + extra;
+    view.root.y = fromY;
+    view.anchorRow = action.toRow;
+    this.jumpAnims.set(action.sourceId, {
+      age: 0,
+      duration: SPECIAL_JUMP_SEC,
+      fromY,
+      toY,
+    });
+  }
+
+  private startSpawnBirthAnim(instanceId: string): void {
+    const view = this.blockViews.get(instanceId);
+    const monster = this.findMonsterByInstanceId(instanceId);
+    if (!view || !monster) return;
+    const w = monster.footprintW * MONSTER_SIZE;
+    const h = monster.footprintH * MONSTER_SIZE;
+    const anim = startMonsterBirthAnim(view.shakeBody, w, h);
+    this.birthAnims.set(instanceId, anim);
+  }
+
+  private advanceSpecialTurnAction(): void {
+    const pb = this.specialTurnPlayback;
+    if (!pb) return;
+    pb.index++;
+    if (pb.index >= pb.actions.length) {
+      this.finishSpecialTurnPlayback();
+      return;
+    }
+    pb.phase = 'line';
+    pb.timer = SPECIAL_ACTION_GAP_SEC;
+  }
+
+  private finishSpecialTurnPlayback(): void {
+    const pb = this.specialTurnPlayback;
+    if (!pb) return;
+    const hits = pb.wallHits;
+    const done = pb.onComplete;
+    this.specialTurnPlayback = null;
+    done(hits);
+  }
+
+  private updateSpecialTurnPlayback(dt: number): void {
+    const pb = this.specialTurnPlayback;
+    if (!pb) return;
+
+    if (pb.phase === 'line') {
+      pb.timer -= dt;
+      if (pb.timer <= 0) this.onSpecialTurnLineDone();
+      return;
+    }
+
+    if (pb.phase === 'wait') {
+      pb.timer -= dt;
+      if (pb.timer <= 0) this.advanceSpecialTurnAction();
+    }
+  }
+
+  private updateJumpAnims(dt: number): void {
+    for (const [id, anim] of this.jumpAnims) {
+      anim.age += dt;
+      const t = Math.min(1, anim.age / anim.duration);
+      const eased = 1 - (1 - t) ** 3;
+      const view = this.blockViews.get(id);
+      if (view) {
+        view.root.y = anim.fromY + (anim.toY - anim.fromY) * eased;
+      }
+      if (t >= 1) this.jumpAnims.delete(id);
+    }
+  }
+
+  private updateBirthAnims(dt: number): void {
+    for (const [id, anim] of this.birthAnims) {
+      if (!tickMonsterBirthAnim(anim, dt)) {
+        this.birthAnims.delete(id);
+      }
+    }
+  }
+
+  private updateChargeSweeps(dt: number): void {
+    for (const [id, view] of this.blockViews) {
+      if (!view.chargeSweepOverlay) continue;
+      if (!this.specialRuntime.isCharging(id)) {
+        view.chargeSweepOverlay.destroy();
+        view.chargeSweepOverlay = null;
+        continue;
+      }
+      view.chargeSweepPhase += dt * 5;
+      view.chargeSweepOverlay.alpha =
+        0.22 + 0.28 * (0.5 + 0.5 * Math.sin(view.chargeSweepPhase));
+    }
+  }
+}
