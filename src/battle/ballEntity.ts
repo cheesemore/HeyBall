@@ -1,5 +1,9 @@
 import { Container, Graphics } from 'pixi.js';
 import { BALL_COLOR_HEX, type BallColor } from '../ballTypes';
+import {
+  attachBigBallTrail,
+  type BigBallParticleTrail,
+} from '../ball/bigBallGlow';
 import { createBallSprite } from '../game/ballTextures';
 import { getBattleBallRadius } from '../config/gameBalance';
 import { ballHasSplitSkill } from '../logic/combatSession';
@@ -36,6 +40,9 @@ export class BallEntity {
   vy: number;
   alive = true;
   private readonly gfx: Graphics | null;
+  private readonly bigTrail: BigBallParticleTrail | null = null;
+  private lastViewX = 0;
+  private lastViewY = 0;
 
   constructor(
     color: BallColor,
@@ -67,6 +74,10 @@ export class BallEntity {
     this.critDamageMult = critDamageMult;
 
     this.view = new Container();
+    let bigTrail: BigBallParticleTrail | null = null;
+    if (isBig) {
+      bigTrail = attachBigBallTrail(this.view, color, this.radius);
+    }
     const sprite = createBallSprite(color, this.radius * 2);
     if (sprite) {
       this.gfx = null;
@@ -76,7 +87,10 @@ export class BallEntity {
       this.drawVector();
       this.view.addChild(this.gfx);
     }
-    this.syncView();
+    this.bigTrail = bigTrail;
+    this.lastViewX = this.x;
+    this.lastViewY = this.y;
+    this.view.position.set(this.x, this.y);
   }
 
   private drawVector() {
@@ -95,8 +109,13 @@ export class BallEntity {
     }
   }
 
-  syncView() {
+  syncView(dt: number) {
+    const dx = this.x - this.lastViewX;
+    const dy = this.y - this.lastViewY;
     this.view.position.set(this.x, this.y);
+    this.lastViewX = this.x;
+    this.lastViewY = this.y;
+    this.bigTrail?.update(dt, dx, dy);
   }
 
   removeFromDisplay() {

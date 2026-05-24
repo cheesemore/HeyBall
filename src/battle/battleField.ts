@@ -781,7 +781,7 @@ export class BattleField extends Container {
       }
     }
 
-    if (ball.alive) ball.syncView();
+    if (ball.alive) ball.syncView(dt);
   }
 
   private hasActiveSlotBalls(): boolean {
@@ -2052,13 +2052,13 @@ export class BattleField extends Container {
     this.notifySlimeHitView(view);
   }
 
-  /** 德鲁伊爪击：整块 footprint 绿色闪烁 */
+  /** 德鲁伊爪击：整块 footprint 红色闪烁 */
   private flashMonsterClaw(monster: BlockMonster) {
     const view = this.blockViews.get(monster.instanceId);
     if (!view) return;
     view.flashClaw = true;
     view.flashPoison = false;
-    this.flashOverlayFootprint(view, 0x55ee66, 0.9);
+    this.flashOverlayFootprint(view, 0xff5555, 0.9);
     view.flashTime = CLAW_FLASH_DURATION;
     view.flashDuration = CLAW_FLASH_DURATION;
     view.flashOverlay.visible = true;

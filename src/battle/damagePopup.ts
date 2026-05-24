@@ -21,8 +21,8 @@ const FILL_COLOR = 0xff3333;
 const FILL_ASSASSIN = 0xffd700;
 const FILL_POISON = 0xda70d6;
 const STROKE_POISON = 0x4a1060;
-const FILL_CLAW = 0x7cfc00;
-const STROKE_CLAW = 0x1a4a20;
+const FILL_CLAW = 0xff4444;
+const STROKE_CLAW = 0x5c1515;
 
 export type PopupStyle =
   | 'normal'

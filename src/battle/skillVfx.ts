@@ -620,9 +620,9 @@ export class SkillVfxLayer extends Container {
       g.lineTo(ux * trailEnd, uy * trailEnd);
       g.stroke({ width: w, color, alpha });
     };
-    drawTrail(14, 0x2d8a3e, 0.35 * fade);
-    drawTrail(6, 0x66ff88, 0.55 * fade);
-    drawTrail(2.5, 0xe8ffe8, 0.75 * fade);
+    drawTrail(14, 0x8a2828, 0.35 * fade);
+    drawTrail(6, 0xff5555, 0.55 * fade);
+    drawTrail(2.5, 0xffe0e0, 0.75 * fade);
 
     const slash = 36 + t * 22;
     const slashAngles = [-0.75, -0.42, -0.1];
@@ -644,24 +644,24 @@ export class SkillVfxLayer extends Container {
         g.lineTo(sx1, sy1);
         g.stroke({ width: w, color, alpha });
       };
-      drawSlash(10 - i * 2, 0x1a6b28, 0.45 * fade);
-      drawSlash(6 - i, 0x44cc55, 0.75 * fade);
-      drawSlash(2.5, 0xffe8a0, 0.9 * fade);
+      drawSlash(10 - i * 2, 0x6b1a1a, 0.45 * fade);
+      drawSlash(6 - i, 0xee4444, 0.75 * fade);
+      drawSlash(2.5, 0xffddaa, 0.9 * fade);
     }
 
     const burstR = 14 + t * 28;
     g.circle(0, 0, burstR);
-    g.fill({ color: 0x33aa44, alpha: 0.4 * fade });
+    g.fill({ color: 0xcc3333, alpha: 0.4 * fade });
     g.circle(0, 0, burstR * 0.55);
     g.fill({ color: 0xffcc66, alpha: 0.65 * fade });
     g.circle(0, 0, burstR * 1.35);
-    g.stroke({ width: 3, color: 0x88ff99, alpha: 0.7 * fade });
+    g.stroke({ width: 3, color: 0xff8888, alpha: 0.7 * fade });
 
     for (let i = 0; i < 5; i++) {
       const ang = (i / 5) * Math.PI * 2 + e.age * 5;
       const dist = burstR * 0.85;
       g.circle(Math.cos(ang) * dist, Math.sin(ang) * dist, 3 + (1 - t) * 2);
-      g.fill({ color: 0xaaff88, alpha: 0.8 * fade });
+      g.fill({ color: 0xff9999, alpha: 0.8 * fade });
     }
   }
 
