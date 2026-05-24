@@ -1,5 +1,6 @@
 import { Container, Graphics } from 'pixi.js';
 import { BALL_COLOR_HEX, type BallColor } from '../ballTypes';
+import { createBallSprite } from '../game/ballTextures';
 import { getBattleBallRadius } from '../config/gameBalance';
 import { ballHasSplitSkill } from '../logic/combatSession';
 
@@ -34,7 +35,7 @@ export class BallEntity {
   vx: number;
   vy: number;
   alive = true;
-  private readonly gfx: Graphics;
+  private readonly gfx: Graphics | null;
 
   constructor(
     color: BallColor,
@@ -66,13 +67,20 @@ export class BallEntity {
     this.critDamageMult = critDamageMult;
 
     this.view = new Container();
-    this.gfx = new Graphics();
-    this.draw();
-    this.view.addChild(this.gfx);
+    const sprite = createBallSprite(color, this.radius * 2);
+    if (sprite) {
+      this.gfx = null;
+      this.view.addChild(sprite);
+    } else {
+      this.gfx = new Graphics();
+      this.drawVector();
+      this.view.addChild(this.gfx);
+    }
     this.syncView();
   }
 
-  private draw() {
+  private drawVector() {
+    if (!this.gfx) return;
     const hex = BALL_COLOR_HEX[this.color];
     const r = this.radius;
     this.gfx.clear();

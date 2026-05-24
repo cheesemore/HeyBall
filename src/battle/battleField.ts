@@ -1,4 +1,4 @@
-import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { LaunchBallUnit } from '../ballComposition';
 import {
   BALL_GRAVITY,
@@ -17,7 +17,6 @@ import {
 } from '../config/ballSkills';
 import { getBattleBallRadius } from '../config/gameBalance';
 import {
-  getMonsterHpTextFill,
   getMonsterType,
   type MonsterTypeId,
 } from '../config/monsterTable';
@@ -132,9 +131,23 @@ import {
   createShakeState,
   drawMonsterBlock,
   extendHitShake,
+  MONSTER_HP_TEXT_FILL,
+  MONSTER_HP_TEXT_INSET,
+  MONSTER_HP_TEXT_STROKE,
+  MONSTER_HP_TEXT_STROKE_WIDTH,
+  NORMAL_BLOCK_INNER_INSET,
   updateMonsterShake,
   type MonsterShakeState,
 } from './blockHitFeedback';
+import {
+  createMonsterSlimeSprite,
+  createSlimeIdleState,
+  notifySlimeHit,
+  slimeIdleKeyForType,
+  slimeIdleTextureAtPhase,
+  tickSlimeIdle,
+  type SlimeIdleState,
+} from '../game/monsterTextures';
 import { DamagePopupLayer, type PopupStyle } from './damagePopup';
 import { SkillVfxLayer } from './skillVfx';
 import { UltimateVfxLayer } from './ultimateVfx';
@@ -176,6 +189,8 @@ const SPECIAL_ACTION_GAP_SEC = 0.05;
 interface BlockView {
   root: Container;
   shakeBody: Container;
+  idleSprite: Sprite | null;
+  slimeIdle: SlimeIdleState | null;
   hpText: Text;
   flashOverlay: Graphics;
   frostOverlay: Graphics | null;
@@ -624,6 +639,7 @@ export class BattleField extends Container {
     this.updateBlockShakes(dt);
     this.updateJumpAnims(dt);
     this.updateBirthAnims(dt);
+    this.updateSlimeIdleAnims(dt);
     this.updateSpecialTurnPlayback(dt);
     this.updateTurnSpawnAnim(dt);
     this.updateAirDropAnim(dt);
@@ -1843,6 +1859,19 @@ export class BattleField extends Container {
     );
     shakeBody.addChild(g);
 
+    let idleSprite: Sprite | null = null;
+    let slimeIdle: SlimeIdleState | null = null;
+    const slimeSpr = createMonsterSlimeSprite(m.typeId);
+    if (slimeSpr) {
+      const key = slimeIdleKeyForType(m.typeId);
+      if (key) {
+        slimeIdle = createSlimeIdleState(key);
+        idleSprite = slimeSpr;
+        slimeSpr.position.set(w / 2, h - NORMAL_BLOCK_INNER_INSET);
+        shakeBody.addChild(slimeSpr);
+      }
+    }
+
     const flashOverlay = new Graphics();
     const pad = 2;
     flashOverlay.roundRect(pad, pad, w - pad * 2, h - pad * 2, BLOCK_CORNER_RADIUS);
@@ -1863,18 +1892,25 @@ export class BattleField extends Container {
       style: {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
         fontSize,
-        fill: getMonsterHpTextFill(m.typeId),
+        fill: MONSTER_HP_TEXT_FILL,
         fontWeight: 'bold',
+        stroke: {
+          color: MONSTER_HP_TEXT_STROKE,
+          width: MONSTER_HP_TEXT_STROKE_WIDTH,
+          join: 'round',
+        },
       },
     });
-    hpText.anchor.set(0.5);
-    hpText.position.set(w / 2, h / 2);
+    hpText.anchor.set(1, 1);
+    hpText.position.set(w - MONSTER_HP_TEXT_INSET, h - MONSTER_HP_TEXT_INSET);
     shakeBody.addChild(hpText);
 
     this.blockLayer.addChild(root);
     const view: BlockView = {
       root,
       shakeBody,
+      idleSprite,
+      slimeIdle,
       hpText,
       flashOverlay,
       frostOverlay: null,
@@ -1998,6 +2034,7 @@ export class BattleField extends Container {
     view.flashOverlay.visible = true;
     view.flashOverlay.alpha = 1;
     extendHitShake(view.shake, this.battleClock);
+    this.notifySlimeHitView(view);
   }
 
   /** 德鲁伊爪击：整块 footprint 绿色闪烁 */
@@ -2012,6 +2049,7 @@ export class BattleField extends Container {
     view.flashOverlay.visible = true;
     view.flashOverlay.alpha = 0.95;
     extendHitShake(view.shake, this.battleClock);
+    this.notifySlimeHitView(view);
   }
 
   /** 术士毒发：整块 footprint 紫色闪烁 */
@@ -2026,6 +2064,11 @@ export class BattleField extends Container {
     view.flashOverlay.visible = true;
     view.flashOverlay.alpha = 0.95;
     extendHitShake(view.shake, this.battleClock);
+    this.notifySlimeHitView(view);
+  }
+
+  private notifySlimeHitView(view: BlockView): void {
+    if (view.slimeIdle) notifySlimeHit(view.slimeIdle);
   }
 
   private updateBlockFlashes(dt: number) {
@@ -2287,6 +2330,20 @@ export class BattleField extends Container {
       if (!tickMonsterBirthAnim(anim, dt)) {
         this.birthAnims.delete(id);
       }
+    }
+  }
+
+  private updateSlimeIdleAnims(dt: number): void {
+    for (const view of this.blockViews.values()) {
+      const spr = view.idleSprite;
+      const state = view.slimeIdle;
+      if (!spr || !state) continue;
+      tickSlimeIdle(state, dt);
+      spr.texture = slimeIdleTextureAtPhase(
+        state.slimeKey,
+        state.phase,
+        state.hitMode,
+      );
     }
   }
 

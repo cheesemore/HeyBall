@@ -2,6 +2,8 @@ import { Application, Container, Graphics } from 'pixi.js';
 import { bindAudioUnlock } from './audio/audioEngine';
 import { TARGET_FPS } from './config/gameBalance';
 import { GameManager } from './game/gameManager';
+import { initBallTextures } from './game/ballTextures';
+import { initMonsterTextures } from './game/monsterTextures';
 import { AssetLoadingScreen } from './game/screens/AssetLoadingScreen';
 import { LoginScreen } from './game/screens/LoginScreen';
 import {
@@ -75,6 +77,8 @@ async function bootstrap(): Promise<void> {
       loadOutcome.result.failedPaths.slice(0, 20),
     );
   }
+
+  await Promise.all([initBallTextures(), initMonsterTextures()]);
 
   drawZones(root);
   drawLines(root);

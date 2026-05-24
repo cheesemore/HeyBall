@@ -2,10 +2,31 @@ import type { Container, Graphics } from 'pixi.js';
 
 import type { MonsterTypeId } from '../config/monsterTable';
 import { getSpecialMonsterDef, isSpecialMonsterType } from '../config/specialMonsters';
+import { MONSTER_SIZE } from '../layout';
 
 
 
 export const BLOCK_CORNER_RADIUS = 6;
+
+/** 灰砖内嵌中灰描边圈（与特殊砖 inset 一致） */
+export const NORMAL_BLOCK_INNER_INSET = 9;
+
+export const NORMAL_BLOCK_INNER_RING_COLOR = 0x888888;
+
+export const NORMAL_BLOCK_INNER_RING_WIDTH = 2;
+
+/** 灰砖内圈（中灰描边以内）边长，用于居中放置 64px 怪物贴图 */
+export const NORMAL_BLOCK_CENTER_SIZE =
+  MONSTER_SIZE - NORMAL_BLOCK_INNER_INSET * 2;
+
+/** 血量数字：砖块右下角留白 */
+export const MONSTER_HP_TEXT_INSET = 7;
+
+export const MONSTER_HP_TEXT_FILL = 0xffffff;
+
+export const MONSTER_HP_TEXT_STROKE = 0x000000;
+
+export const MONSTER_HP_TEXT_STROKE_WIDTH = 4;
 
 export const HIT_SHAKE_GRACE_SEC = 0.14;
 
@@ -135,6 +156,17 @@ export function drawMonsterBlock(
         g.fill({ color: 0x0a0a0a, alpha: 1 });
       }
     }
+    return;
+  }
+
+  if (typeId === 'normal') {
+    const inset = NORMAL_BLOCK_INNER_INSET;
+    g.roundRect(inset, inset, w - inset * 2, h - inset * 2, innerR);
+    g.stroke({
+      width: NORMAL_BLOCK_INNER_RING_WIDTH,
+      color: NORMAL_BLOCK_INNER_RING_COLOR,
+      alpha: 0.95,
+    });
     return;
   }
 

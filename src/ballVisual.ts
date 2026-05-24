@@ -1,9 +1,17 @@
 import { Container, Graphics } from 'pixi.js';
 import { getTableBallRadius } from './config/gameBalance';
+import { createBallSprite } from './game/ballTextures';
 import { BALL_COLOR_HEX, type BallItem, BallTier } from './ballTypes';
 
 /** 格子内绘制略缩小，避免贴边；表底半径见 getTableBallRadius */
 const GRID_CELL_DRAW_SCALE = 0.85;
+
+function shade(color: number, factor: number): number {
+  const r = ((color >> 16) & 0xff) * factor;
+  const g = ((color >> 8) & 0xff) * factor;
+  const b = (color & 0xff) * factor;
+  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
+}
 
 /** 格子内展示：小球/大球固定半径，仅表示数量与大小类型 */
 export function createBallVisual(
@@ -16,9 +24,17 @@ export function createBallVisual(
   const hex = BALL_COLOR_HEX[item.color];
   const cx = cellSize / 2;
   const cy = cellSize / 2;
+  let usedSprite = false;
 
   const drawBall = (x: number, y: number, isBig: boolean) => {
     const r = getTableBallRadius(isBig) * GRID_CELL_DRAW_SCALE * radiusScale;
+    const sprite = createBallSprite(item.color, r * 2);
+    if (sprite) {
+      sprite.position.set(x, y);
+      root.addChild(sprite);
+      usedSprite = true;
+      return;
+    }
     g.circle(x, y, r);
     g.fill(isBig ? shade(hex, 0.82) : hex);
     g.circle(x - r * 0.25, y - r * 0.25, r * 0.28);
@@ -49,14 +65,7 @@ export function createBallVisual(
       break;
   }
 
-  root.addChild(g);
+  if (!usedSprite) root.addChild(g);
   root.eventMode = 'none';
   return root;
-}
-
-function shade(color: number, factor: number): number {
-  const r = ((color >> 16) & 0xff) * factor;
-  const g = ((color >> 8) & 0xff) * factor;
-  const b = (color & 0xff) * factor;
-  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b);
 }
