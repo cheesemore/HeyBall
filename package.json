@@ -7,6 +7,7 @@
     "dev": "vite",
     "build:asset-manifest": "node scripts/build-asset-manifest.mjs",
     "build": "npm run build:asset-manifest && tsc && vite build",
+    "build:wx": "node scripts/build-wx.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

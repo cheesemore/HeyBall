@@ -1,0 +1,37 @@
+{
+  "setting": {
+    "es6": true,
+    "postcss": true,
+    "minified": true,
+    "uglifyFileName": false,
+    "enhance": true,
+    "packNpmRelationList": [],
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    },
+    "useCompilerPlugins": false
+  },
+  "compileType": "game",
+  "simulatorPluginLibVersion": {},
+  "packOptions": {
+    "ignore": [
+      { "type": "folder", "value": "node_modules" },
+      { "type": "folder", "value": "src" },
+      { "type": "folder", "value": "dist" },
+      { "type": "folder", "value": ".git" },
+      { "type": "folder", "value": "temp-experiment" },
+      { "type": "folder", "value": "docs" },
+      { "type": "folder", "value": "public" },
+      { "type": "suffix", "value": ".ts" },
+      { "type": "file", "value": "index.html" },
+      { "type": "file", "value": "vite.config.ts" },
+      { "type": "file", "value": "vite.config.wx.ts" }
+    ],
+    "include": []
+  },
+  "isGameTourist": false,
+  "appid": "wxabd10ecffa202293",
+  "editorSetting": {}
+}

@@ -1,5 +1,7 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { formatAppVersion } from '../../config/version';
+import { isWxGame } from '../../platform/env';
+import { gameStorage } from '../../platform/storage';
 import { GAME_HEIGHT, GAME_WIDTH } from '../../layout';
 
 const BG = 0x0b1a3d;
@@ -70,7 +72,9 @@ export class LoginScreen extends Container {
     this.addChild(sub);
 
     const hint = new Text({
-      text: '点击下方按钮开始冒险',
+      text: isWxGame()
+        ? '点击开始游戏'
+        : '点击下方按钮开始冒险',
       style: {
         fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
         fontSize: 20,
@@ -110,7 +114,7 @@ export class LoginScreen extends Container {
     input.placeholder = '昵称（可选）';
     input.autocomplete = 'username';
     input.spellcheck = false;
-    const saved = sessionStorage.getItem(NICKNAME_KEY);
+    const saved = gameStorage.getItem(NICKNAME_KEY);
     if (saved) input.value = saved;
 
     Object.assign(input.style, {
@@ -201,9 +205,11 @@ export class LoginScreen extends Container {
 
   private tryStart(): void {
     if (!this.resolveStart) return;
-    const nickname = this.inputEl?.value.trim() ?? '';
-    if (nickname) sessionStorage.setItem(NICKNAME_KEY, nickname);
-    else sessionStorage.removeItem(NICKNAME_KEY);
+    const nickname = isWxGame()
+      ? (gameStorage.getItem(NICKNAME_KEY) ?? '玩家')
+      : (this.inputEl?.value.trim() ?? '');
+    if (nickname) gameStorage.setItem(NICKNAME_KEY, nickname);
+    else gameStorage.removeItem(NICKNAME_KEY);
     const resolve = this.resolveStart;
     this.resolveStart = null;
     resolve({ nickname });

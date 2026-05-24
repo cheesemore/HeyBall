@@ -1,5 +1,6 @@
+import { isWxGame } from '../platform/env';
 import assetManifestDoc from './config/assetManifest.json';
-import { publicAssetUrl } from './loadPublicTexture';
+import { loadPublicTexture, publicAssetUrl } from './loadPublicTexture';
 
 /** 与 manifest schemaVersion 同步；改结构时递增以丢弃旧 Cache */
 export const GAME_ASSET_CACHE_NAME = 'heyball-game-assets-v1';
@@ -50,6 +51,13 @@ async function openAssetCache(): Promise<Cache | null> {
 
 async function preloadOnePath(rel: string, cache: Cache | null): Promise<void> {
   const url = publicAssetUrl(rel);
+
+  if (isWxGame()) {
+    const tex = await loadPublicTexture(url);
+    tex.destroy(true);
+    return;
+  }
+
   let response: Response | undefined;
 
   if (cache) {

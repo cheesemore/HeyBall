@@ -1,5 +1,7 @@
 node_modules/
 dist/
+game.js
+assets/
 .vite/
 *.local
 .env
