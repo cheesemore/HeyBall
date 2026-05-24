@@ -110,9 +110,9 @@ export const MONSTER_TABLE: Record<MonsterTypeId, MonsterTypeRow> = {
 
     footprintH: ELITE_FOOTPRINT_H,
 
-    fillColor: 0xdd3333,
+    fillColor: 0x8b1515,
 
-    strokeColor: 0xff5555,
+    strokeColor: 0xaa2222,
 
   },
 
@@ -128,9 +128,9 @@ export const MONSTER_TABLE: Record<MonsterTypeId, MonsterTypeRow> = {
 
     footprintH: BOSS_FOOTPRINT_H,
 
-    fillColor: 0x660018,
+    fillColor: 0x4a0010,
 
-    strokeColor: 0x990022,
+    strokeColor: 0x6a0018,
 
   },
 

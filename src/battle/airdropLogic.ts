@@ -16,7 +16,7 @@ import {
 
 import type { BlockMonster } from './monster';
 
-import { createMonsterInstance } from './monster';
+import { createMonsterInstance, isAnchorCell } from './monster';
 
 import {
 
@@ -80,24 +80,27 @@ function blocksAirDropLanding(m: BlockMonster): boolean {
 
 
 
-function getAnchorMonster(
-
+function getOccupantAt(
   grid: MonsterGrid,
-
   row: number,
-
   col: number,
-
 ): BlockMonster | null {
+  return grid[row]?.[col] ?? null;
+}
 
-  const m = grid[row]?.[col];
+function getAnchorMonster(
+  grid: MonsterGrid,
+  row: number,
+  col: number,
+): BlockMonster | null {
+  const m = getOccupantAt(grid, row, col);
+  if (!m || !isAnchorCell(m, row, col)) return null;
+  return m;
+}
 
-  if (!m) return null;
-
-  if (m.anchorRow === row && m.anchorCol === col) return m;
-
-  return null;
-
+function cellBlocksAirDrop(grid: MonsterGrid, row: number, col: number): boolean {
+  const m = getOccupantAt(grid, row, col);
+  return m != null && blocksAirDropLanding(m);
 }
 
 
@@ -148,11 +151,12 @@ function placeAirdrop(
 
 
 
-  const existing = getAnchorMonster(grid, row, col);
+  if (cellBlocksAirDrop(grid, row, col)) return;
+
+  const existing = getOccupantAt(grid, row, col);
 
   if (existing) {
-
-    if (blocksAirDropLanding(existing)) return;
+    if (!isAnchorCell(existing, row, col)) return;
 
     const c = crushAt(grid, row, col);
 
@@ -172,7 +176,7 @@ function placeAirdrop(
 
 
 
-/** 蓝色空降：图案落在 3–7 行，精英格不降落，其余击碎 */
+/** 蓝色空降：图案落在 3–7 行，精英/首领占用格不降落，其余击碎 */
 
 export function applyBlueAirDrop(
   grid: MonsterGrid,
@@ -189,9 +193,7 @@ export function applyBlueAirDrop(
 
   for (const { row, col } of cells) {
 
-    const occ = getAnchorMonster(grid, row, col);
-
-    if (occ && blocksAirDropLanding(occ)) continue;
+    if (cellBlocksAirDrop(grid, row, col)) continue;
 
     placeAirdrop(grid, 'airdrop_blue', row, col, growthStep, placed, crushed);
 
@@ -205,7 +207,7 @@ export function applyBlueAirDrop(
 
 
 
-/** 每列最前砖块前方（不低于第 3 行），精英列跳过 */
+/** 每列最前砖块前方（不低于第 3 行），精英/首领占用格跳过 */
 
 export function getFrontRowInColumn(
 
@@ -252,11 +254,7 @@ export function applyRedAirDrop(
 
 
 
-    const occ = getAnchorMonster(grid, row, col);
-
-    if (occ && blocksAirDropLanding(occ)) continue;
-
-
+    if (cellBlocksAirDrop(grid, row, col)) continue;
 
     placeAirdrop(grid, 'airdrop_red', row, col, growthStep, placed, crushed);
 

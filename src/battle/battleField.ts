@@ -135,7 +135,7 @@ import {
   MONSTER_HP_TEXT_INSET,
   MONSTER_HP_TEXT_STROKE,
   MONSTER_HP_TEXT_STROKE_WIDTH,
-  NORMAL_BLOCK_INNER_INSET,
+  createSlimeUvGlow,
   updateMonsterShake,
   type MonsterShakeState,
 } from './blockHitFeedback';
@@ -143,6 +143,7 @@ import {
   createMonsterSlimeSprite,
   createSlimeIdleState,
   notifySlimeHit,
+  placeMonsterSlimeSprite,
   slimeIdleKeyForType,
   slimeIdleTextureAtPhase,
   tickSlimeIdle,
@@ -190,6 +191,7 @@ interface BlockView {
   root: Container;
   shakeBody: Container;
   idleSprite: Sprite | null;
+  slimeGlow: Container | null;
   slimeIdle: SlimeIdleState | null;
   hpText: Text;
   flashOverlay: Graphics;
@@ -1860,6 +1862,7 @@ export class BattleField extends Container {
     shakeBody.addChild(g);
 
     let idleSprite: Sprite | null = null;
+    let slimeGlow: Container | null = null;
     let slimeIdle: SlimeIdleState | null = null;
     const slimeSpr = createMonsterSlimeSprite(m.typeId);
     if (slimeSpr) {
@@ -1867,7 +1870,18 @@ export class BattleField extends Container {
       if (key) {
         slimeIdle = createSlimeIdleState(key);
         idleSprite = slimeSpr;
-        slimeSpr.position.set(w / 2, h - NORMAL_BLOCK_INNER_INSET);
+        const { displayW, displayH } = placeMonsterSlimeSprite(
+          slimeSpr,
+          m.typeId,
+          w,
+          h,
+        );
+        if (m.typeId === 'elite' || m.typeId === 'boss') {
+          const glow = createSlimeUvGlow(m.typeId, displayW, displayH);
+          glow.position.copyFrom(slimeSpr.position);
+          shakeBody.addChild(glow);
+          slimeGlow = glow;
+        }
         shakeBody.addChild(slimeSpr);
       }
     }
@@ -1910,6 +1924,7 @@ export class BattleField extends Container {
       root,
       shakeBody,
       idleSprite,
+      slimeGlow,
       slimeIdle,
       hpText,
       flashOverlay,
@@ -2344,6 +2359,10 @@ export class BattleField extends Container {
         state.phase,
         state.hitMode,
       );
+      if (view.slimeGlow) {
+        const pulse = 0.72 + 0.28 * Math.sin(state.phase * Math.PI * 2);
+        view.slimeGlow.alpha = pulse;
+      }
     }
   }
 
