@@ -1105,6 +1105,10 @@ export class BattleField extends Container {
     const spreadRad = (WARRIOR_SPLIT_ANGLE_SPREAD_DEG * Math.PI) / 180;
     const childRadius = getBattleBallRadius(false);
     const remaining = Math.max(0, parent.maxBounces - parent.bounces);
+    const childAttack = Math.max(
+      1,
+      Math.round(parent.attack * WARRIOR_SPLIT_ATTACK_RATIO),
+    );
 
     for (let i = 0; i < WARRIOR_BIG_SPLIT_COUNT; i++) {
       const offset = (Math.random() * 2 - 1) * spreadRad;
@@ -1116,7 +1120,7 @@ export class BattleField extends Container {
         parent.y,
         Math.cos(angle) * speed,
         Math.sin(angle) * speed,
-        parent.attack,
+        childAttack,
         remaining,
         parent.critRate,
         parent.critDamageMult,

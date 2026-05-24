@@ -9,8 +9,8 @@ export const MONSTER_HP_GROWTH_STEPS = 20;
 /** 每累计多少「刷出行」触发 1 档增长 */
 export const MONSTER_HP_ROWS_PER_GROWTH = 8;
 
-/** 21 档起：每档在 40 倍基础上 +1 倍（21 档 = 41 倍，22 档 = 42 倍…） */
-export const MONSTER_HP_LINEAR_PER_STEP_AFTER_CAP = 1;
+/** 21 档起：每档在 40 倍基础上 +2 倍（21 档 = 42 倍，22 档 = 44 倍…） */
+export const MONSTER_HP_LINEAR_PER_STEP_AFTER_CAP = 2;
 
 /** 等比公比：1 × r^20 = MONSTER_HP_FINAL_MULT */
 export const MONSTER_HP_GEOMETRIC_RATIO =

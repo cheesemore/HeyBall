@@ -1,6 +1,10 @@
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import { formatRunBallEffectsLines } from '../config/ballCatalog';
 import { getRecruitCost } from '../config/recruitCost';
+import {
+  getMonsterGrowthStep,
+  getMonsterHpMultiplier,
+} from '../config/monsterScaling';
 import { getNextBossSpawnOrdinal } from '../config/monsterSpawn';
 import { getRogueShopPrice, ROGUE_SHOP_MAX_PURCHASES } from '../config/rogueShop';
 import type { RogueUpgradeId } from '../config/rogueUpgrades';
@@ -919,7 +923,12 @@ export class GameManager {
     const bossRowsLeft = Math.max(0, nextBoss - rowOrdinal);
     const bossTag = this.battle.isBossActive() ? ' · 首领战' : '';
     this.turnText.text = `回合 ${state.turn} · 波次 ${rowOrdinal}${bossTag}`;
-    this.bossCountdownText.text = `首领倒计行数：${bossRowsLeft}`;
+    const growthStep = getMonsterGrowthStep(rowOrdinal);
+    const hpMult = getMonsterHpMultiplier(growthStep);
+    const multLabel = Number.isInteger(hpMult)
+      ? String(hpMult)
+      : hpMult.toFixed(1);
+    this.bossCountdownText.text = `首领倒计行数：${bossRowsLeft} · 怪物档次：${growthStep} · 怪物倍率：${multLabel}×`;
     this.mergeAttackBonusText.text = `合成攻击 +${state.mergeAttackBonusPercent}%`;
     const autoTag =
       this.autoPlayEnabled && state.phase === 'prepare' ? ' · 自动' : '';

@@ -8,13 +8,14 @@ export const WARRIOR_SPLIT_ANGLE_SPREAD_DEG = 45;
 
 export const WARRIOR_SPLIT_SIZE_RATIO = 0.5;
 
-export const WARRIOR_SPLIT_ATTACK_RATIO = 0.5;
+/** 分裂球攻击 = 母体 × 此比例 */
+export const WARRIOR_SPLIT_ATTACK_RATIO = 0.25;
 
 export const WARRIOR_SPLIT_BOUNCES_RATIO = 0.5;
 
 
 
-/** 战士大球：30% 直接分裂 4 颗最小球（攻击/碰撞继承大球） */
+/** 战士大球：30% 直接分裂 4 颗最小球（攻击按 WARRIOR_SPLIT_ATTACK_RATIO 继承） */
 
 export const WARRIOR_BIG_SPLIT_CHANCE = 0.3;
 
